@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { supabase } from '../supabaseClient';
-import { Users, X, Euro } from 'lucide-react';
+import { Users, X, Euro, Filter } from 'lucide-react';
 // Assicurati che il percorso sia corretto e che il file esista
 import { generateReceiptPDF } from '../utils/pdfGenerator';
+import { Printer, Save } from 'lucide-react'; 
 
 const MESI = [
   { val: 0, label: 'ISCR' },
@@ -13,12 +14,40 @@ const MESI = [
   { val: 6, label: 'GIU' }, { val: 7, label: 'LUG' }
 ];
 
+const ANNI_ACCADEMICI = [
+    '2023/2024',
+    '2024/2025',
+    '2025/2026',
+    '2026/2027'
+];
+
+// Calcola l'anno accademico corrente
+const getCurrentAcademicYear = () => {
+    const today = new Date();
+    const month = today.getMonth() + 1; 
+    const year = today.getFullYear();
+    if (month >= 9) return `${year}/${year + 1}`;
+    return `${year - 1}/${year}`;
+};
+
+// Calcola anno da una data specifica
+const getAcademicYearFromDate = (dateString) => {
+    if (!dateString) return getCurrentAcademicYear();
+    const d = new Date(dateString);
+    const month = d.getMonth() + 1;
+    const year = d.getFullYear();
+    if (month >= 9) return `${year}/${year + 1}`;
+    return `${year - 1}/${year}`;
+};
+
 export default function DettaglioPagamenti() {
   const [docenti, setDocenti] = useState([]);
   const [selectedDocenteId, setSelectedDocenteId] = useState('');
+  const [selectedAnno, setSelectedAnno] = useState(getCurrentAcademicYear());
+  
   const [loading, setLoading] = useState(false);
   const [matrix, setMatrix] = useState([]);
-  const [quotaIscrizione, setQuotaIscrizione] = useState(30); // Default
+  const [quotaIscrizione, setQuotaIscrizione] = useState(30); 
   
   // Modali
   const [showPayModal, setShowPayModal] = useState(false);
@@ -44,11 +73,17 @@ export default function DettaglioPagamenti() {
   useEffect(() => {
     if (selectedDocenteId) loadDettagli();
     else setMatrix([]);
-  }, [selectedDocenteId]);
+  }, [selectedDocenteId, selectedAnno]);
 
   const loadDettagli = async () => {
     setLoading(true);
     try {
+      // Calcolo range date per filtrare le lezioni
+      const [startYear, endYear] = selectedAnno.split('/').map(Number);
+      const startDate = `${startYear}-09-01`;
+      const endDate = `${endYear}-08-31`;
+
+      // 1. Fetch Alunni (tramite associazioni)
       const { data: assocData } = await supabase
         .from('associazioni')
         .select('alunno_id, alunni(id, nome)')
@@ -67,10 +102,13 @@ export default function DettaglioPagamenti() {
         }
       });
 
+      // 2. Fetch Lezioni (filtro per data range anno accademico)
       const { data: lezioni } = await supabase
         .from('registro')
         .select(`alunno_id, data_lezione, tipi_lezioni ( costo )`)
-        .eq('docente_id', selectedDocenteId);
+        .eq('docente_id', selectedDocenteId)
+        .gte('data_lezione', startDate)
+        .lte('data_lezione', endDate);
 
       if (lezioni) {
         lezioni.forEach(lez => {
@@ -84,10 +122,12 @@ export default function DettaglioPagamenti() {
         });
       }
 
+      // 3. Fetch Pagamenti (filtro per anno_accademico)
       const { data: pagamenti } = await supabase
         .from('pagamenti')
         .select('alunno_id, importo, mese_riferimento, tipologia')
-        .eq('docente_id', selectedDocenteId);
+        .eq('docente_id', selectedDocenteId)
+        .eq('anno_accademico', selectedAnno);
 
       if (pagamenti) {
         pagamenti.forEach(pay => {
@@ -104,7 +144,8 @@ export default function DettaglioPagamenti() {
 
       // Calcolo finali con quota dinamica
       Object.values(alunniMap).forEach(alu => {
-         // Applica quota iscrizione dinamica
+         // Applica quota iscrizione dinamica (solo se stiamo guardando l'anno corrente o logica a piacere)
+         // Qui applichiamo sempre, assumendo che l'associazione implichi l'iscrizione per quell'anno
          alu.mesi[0].dovuto = quotaIscrizione; 
          
          // Calcola totali riga
@@ -147,17 +188,24 @@ export default function DettaglioPagamenti() {
     try {
       let items = [];
       let title = "";
+      
+      const [startYear, endYear] = selectedAnno.split('/').map(Number);
+      const startDate = `${startYear}-09-01`;
+      const endDate = `${endYear}-08-31`;
 
       if (tipo === 'dovuto') {
         title = `Dettaglio Dovuto - Mese ${MESI.find(m=>m.val===mese)?.label}`;
         if (mese === 0) {
              items = [{ data: '-', desc: 'Quota Iscrizione', importo: quotaIscrizione }];
         } else {
+             // Fetch dettaglio lezioni filtrato per anno
              const { data: lezioni } = await supabase
                 .from('registro')
                 .select(`data_lezione, tipi_lezioni(tipo, costo)`)
                 .eq('docente_id', selectedDocenteId)
                 .eq('alunno_id', alunnoId)
+                .gte('data_lezione', startDate)
+                .lte('data_lezione', endDate)
                 .order('data_lezione');
              
              items = (lezioni || [])
@@ -174,7 +222,8 @@ export default function DettaglioPagamenti() {
             .from('pagamenti')
             .select('data_pagamento, tipologia, importo, note')
             .eq('docente_id', selectedDocenteId)
-            .eq('alunno_id', alunnoId);
+            .eq('alunno_id', alunnoId)
+            .eq('anno_accademico', selectedAnno); // Filtro anche qui per anno
         
         if (mese === 0) {
             query = query.eq('tipologia', 'Iscrizione');
@@ -202,20 +251,37 @@ export default function DettaglioPagamenti() {
     <div className="flex flex-col h-full bg-accademia-card border border-gray-700 rounded-xl overflow-hidden shadow-xl">
       
       {/* Header Selezione */}
-      <div className="px-4 py-3 border-b border-gray-700 bg-gray-900/30 flex items-center justify-between gap-4 shrink-0">
-        <div className="flex items-center gap-2">
+      <div className="px-4 py-3 border-b border-gray-700 bg-gray-900/30 flex flex-col sm:flex-row items-center justify-between gap-4 shrink-0">
+        <div className="flex items-center gap-2 mb-2 sm:mb-0">
             <Users className="text-accademia-red" size={20}/> 
             <h2 className="text-lg font-light text-white">Riepilogo Pagamenti</h2>
         </div>
         
-        <select 
-          className="bg-accademia-input border border-gray-700 text-white rounded-lg px-4 py-2 w-full sm:w-64 focus:border-accademia-red focus:outline-none transition-colors"
-          value={selectedDocenteId}
-          onChange={(e) => setSelectedDocenteId(e.target.value)}
-        >
-          <option value="">-- Seleziona Docente --</option>
-          {docenti.map(d => <option key={d.id} value={d.id}>{d.nome}</option>)}
-        </select>
+        <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+            {/* Selettore Anno */}
+            <div className="flex items-center gap-2 bg-gray-800 rounded-lg px-3 py-1 border border-gray-600 w-full sm:w-auto">
+                <Filter size={14} className="text-gray-400 shrink-0"/>
+                <select 
+                    value={selectedAnno}
+                    onChange={(e) => setSelectedAnno(e.target.value)}
+                    className="bg-transparent text-white text-sm font-bold focus:outline-none cursor-pointer w-full"
+                >
+                    {ANNI_ACCADEMICI.map(anno => (
+                        <option key={anno} value={anno} className="bg-gray-800 text-white">{anno}</option>
+                    ))}
+                </select>
+            </div>
+
+            {/* Selettore Docente */}
+            <select 
+            className="bg-accademia-input border border-gray-700 text-white rounded-lg px-4 py-2 w-full sm:w-64 focus:border-accademia-red focus:outline-none transition-colors"
+            value={selectedDocenteId}
+            onChange={(e) => setSelectedDocenteId(e.target.value)}
+            >
+            <option value="">-- Seleziona Docente --</option>
+            {docenti.map(d => <option key={d.id} value={d.id}>{d.nome}</option>)}
+            </select>
+        </div>
       </div>
 
       {/* Griglia Dati */}
@@ -384,8 +450,6 @@ function ModalDettaglioCella({ data, onClose }) {
 }
 
 // --- MODALE PAGAMENTO RAPIDO (Usa la utility centrale) ---
-import { Printer, Save } from 'lucide-react'; // Assicuriamoci di importare icone mancanti
-
 function ModalPagamentoRapido({ data, onClose, onSave }) {
   const [formData, setFormData] = useState({ ...data });
   const [isPrinting, setIsPrinting] = useState(false);
@@ -394,6 +458,9 @@ function ModalPagamentoRapido({ data, onClose, onSave }) {
     e.preventDefault();
     try {
       if (shouldPrint) setIsPrinting(true);
+      
+      // Calcola automaticamente l'anno accademico dalla data
+      const annoCalc = getAcademicYearFromDate(formData.data_pagamento);
 
       const payload = {
         alunno_id: formData.alunno_id,
@@ -401,7 +468,7 @@ function ModalPagamentoRapido({ data, onClose, onSave }) {
         importo: parseFloat(formData.importo),
         data_pagamento: formData.data_pagamento,
         mese_riferimento: parseInt(formData.mese_riferimento),
-        anno_accademico: '2025/2026', 
+        anno_accademico: annoCalc, 
         tipologia: formData.tipologia,
         note: formData.note
       };

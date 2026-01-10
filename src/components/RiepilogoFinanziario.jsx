@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient';
-import { ClipboardList } from 'lucide-react';
+import { ClipboardList, Filter } from 'lucide-react';
 
 const MESI = [
   { val: 0, label: 'ISCR' },
@@ -10,49 +10,81 @@ const MESI = [
   { val: 6, label: 'GIU' }, { val: 7, label: 'LUG' }
 ];
 
+// Genera una lista di anni accademici (puoi estenderla se serve)
+const ANNI_ACCADEMICI = [
+    '2023/2024',
+    '2024/2025',
+    '2025/2026',
+    '2026/2027'
+];
+
+// Calcola l'anno accademico corrente basato sulla data odierna
+const getCurrentAcademicYear = () => {
+    const today = new Date();
+    const month = today.getMonth() + 1; // 1-12
+    const year = today.getFullYear();
+    // Se siamo da Gennaio (1) a Agosto (8), l'anno accademico è iniziata l'anno prima (es. Feb 2026 -> 2025/2026)
+    // Se siamo da Settembre (9) a Dicembre (12), l'anno accademico inizia ora (es. Ott 2025 -> 2025/2026)
+    if (month >= 9) return `${year}/${year + 1}`;
+    return `${year - 1}/${year}`;
+};
+
 export default function RiepilogoFinanziario() {
   const [reportData, setReportData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [totals, setTotals] = useState({ dovuto: 0, pagato: 0, diff: 0 });
   const [monthlyTotals, setMonthlyTotals] = useState({});
   const [quotaIscrizione, setQuotaIscrizione] = useState(30);
+  
+  // Stato per l'anno accademico selezionato
+  const [selectedAnno, setSelectedAnno] = useState(getCurrentAcademicYear());
 
   useEffect(() => {
+    // Aggiorna il report ogni volta che cambia l'anno selezionato
     const init = async () => {
         // Fetch quota prima di tutto
         const { data } = await supabase.from('tipi_lezioni').select('costo').eq('tipo', 'Iscrizione').single();
         if (data) setQuotaIscrizione(data.costo);
         
-        fetchReport(data ? data.costo : 30);
+        fetchReport(data ? data.costo : 30, selectedAnno);
     };
     init();
-  }, []);
+  }, [selectedAnno]);
 
-  const fetchReport = async (quotaValue) => {
+  const fetchReport = async (quotaValue, annoAccademico) => {
     setLoading(true);
     try {
-      // 1. Fetch Docenti
+      // Calcola range date per filtrare le lezioni (dal 1 Settembre al 31 Agosto dell'anno successivo)
+      const [startYear, endYear] = annoAccademico.split('/').map(Number);
+      const startDate = `${startYear}-09-01`;
+      const endDate = `${endYear}-08-31`;
+
+      // 1. Fetch Docenti (Attivi)
       const { data: docenti } = await supabase
         .from('docenti')
         .select('id, nome, strumento')
         .eq('stato', 'Attivo')
         .order('nome');
 
-      // 2. Fetch Pagamenti
+      // 2. Fetch Pagamenti (Filtrati per Anno Accademico)
       const { data: pagamenti } = await supabase
         .from('pagamenti')
-        .select('docente_id, importo, mese_riferimento, tipologia');
+        .select('docente_id, importo, mese_riferimento, tipologia')
+        .eq('anno_accademico', annoAccademico);
 
-      // 3. Fetch Registro Lezioni
+      // 3. Fetch Registro Lezioni (Filtrati per data)
       const { data: lezioni } = await supabase
         .from('registro')
         .select(`
           docente_id, 
           data_lezione, 
           tipi_lezioni ( costo )
-        `);
+        `)
+        .gte('data_lezione', startDate)
+        .lte('data_lezione', endDate);
 
-      // 4. Fetch Associazioni (per conteggio iscritti)
+      // 4. Fetch Associazioni (Per conteggio iscritti - Nota: le associazioni sono lo stato "corrente")
+      // Se si volesse lo storico associazioni, servirebbe una tabella storica. Qui usiamo l'attuale.
       const { data: associazioni } = await supabase
         .from('associazioni')
         .select('docente_id');
@@ -170,23 +202,39 @@ export default function RiepilogoFinanziario() {
             <h2 className="text-lg font-light text-white">Riepilogo Finanziario</h2>
         </div>
 
-        {/* Totali Globali */}
-        <div className="flex gap-4 text-xs">
-            <div className="flex flex-col items-end">
-                <span className="text-gray-500 uppercase font-bold tracking-wider">Dovuto</span>
-                <span className="text-gray-300 font-mono text-base">€ {totals.dovuto.toLocaleString()}</span>
+        <div className="flex items-center gap-6">
+            {/* Selettore Anno Accademico */}
+            <div className="flex items-center gap-2 bg-gray-800 rounded-lg px-3 py-1 border border-gray-600">
+                <Filter size={14} className="text-gray-400"/>
+                <select 
+                    value={selectedAnno}
+                    onChange={(e) => setSelectedAnno(e.target.value)}
+                    className="bg-transparent text-white text-sm font-bold focus:outline-none cursor-pointer"
+                >
+                    {ANNI_ACCADEMICI.map(anno => (
+                        <option key={anno} value={anno} className="bg-gray-800 text-white">{anno}</option>
+                    ))}
+                </select>
             </div>
-            <div className="w-px bg-gray-600 h-8 self-center"></div>
-            <div className="flex flex-col items-end">
-                <span className="text-gray-500 uppercase font-bold tracking-wider">Pagato</span>
-                <span className="text-green-400 font-mono text-base">€ {totals.pagato.toLocaleString()}</span>
-            </div>
-            <div className="w-px bg-gray-600 h-8 self-center"></div>
-            <div className="flex flex-col items-end">
-                <span className="text-gray-500 uppercase font-bold tracking-wider">Diff</span>
-                <span className={`font-mono font-bold text-base ${totals.diff >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                    € {Math.abs(totals.diff).toLocaleString()}
-                </span>
+
+            {/* Totali Globali */}
+            <div className="flex gap-4 text-xs hidden sm:flex">
+                <div className="flex flex-col items-end">
+                    <span className="text-gray-500 uppercase font-bold tracking-wider">Dovuto</span>
+                    <span className="text-gray-300 font-mono text-base">€ {totals.dovuto.toLocaleString()}</span>
+                </div>
+                <div className="w-px bg-gray-600 h-8 self-center"></div>
+                <div className="flex flex-col items-end">
+                    <span className="text-gray-500 uppercase font-bold tracking-wider">Pagato</span>
+                    <span className="text-green-400 font-mono text-base">€ {totals.pagato.toLocaleString()}</span>
+                </div>
+                <div className="w-px bg-gray-600 h-8 self-center"></div>
+                <div className="flex flex-col items-end">
+                    <span className="text-gray-500 uppercase font-bold tracking-wider">Diff</span>
+                    <span className={`font-mono font-bold text-base ${totals.diff >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                        € {Math.abs(totals.diff).toLocaleString()}
+                    </span>
+                </div>
             </div>
         </div>
       </div>

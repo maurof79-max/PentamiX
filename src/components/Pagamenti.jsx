@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { supabase } from '../supabaseClient';
-import { Plus, X, Edit2, Trash2, Euro, Printer, Save, ChevronUp, ChevronDown } from 'lucide-react';
+import { Plus, X, Edit2, Trash2, Euro, Printer, Save, ChevronUp, ChevronDown, Filter } from 'lucide-react';
 // Assicurati che il percorso sia corretto
 import { generateReceiptPDF } from '../utils/pdfGenerator';
 
@@ -13,6 +13,32 @@ const MESI = [
   { val: 6, label: 'Giugno' }, { val: 7, label: 'Luglio' }
 ];
 
+const ANNI_ACCADEMICI = [
+    '2023/2024',
+    '2024/2025',
+    '2025/2026',
+    '2026/2027'
+];
+
+// Calcola l'anno accademico corrente (es. oggi è Ott 2025 -> 2025/2026)
+const getCurrentAcademicYear = () => {
+    const today = new Date();
+    const month = today.getMonth() + 1; 
+    const year = today.getFullYear();
+    if (month >= 9) return `${year}/${year + 1}`;
+    return `${year - 1}/${year}`;
+};
+
+// Calcola l'anno accademico basato su una data specifica
+const getAcademicYearFromDate = (dateString) => {
+    if (!dateString) return getCurrentAcademicYear();
+    const d = new Date(dateString);
+    const month = d.getMonth() + 1;
+    const year = d.getFullYear();
+    if (month >= 9) return `${year}/${year + 1}`;
+    return `${year - 1}/${year}`;
+};
+
 export default function Pagamenti() {
   const [pagamenti, setPagamenti] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -21,6 +47,7 @@ export default function Pagamenti() {
   
   // Stati per filtri e ordinamento
   const [filters, setFilters] = useState({ alunno_id: '', mese: '' });
+  const [selectedAnno, setSelectedAnno] = useState(getCurrentAcademicYear());
   const [sortConfig, setSortConfig] = useState({ key: 'data_pagamento', direction: 'desc' });
 
   const [showModal, setShowModal] = useState(false);
@@ -32,12 +59,12 @@ export default function Pagamenti() {
       const { data: d } = await supabase.from('docenti').select('id, nome').order('nome');
       setAlunni(a || []);
       setDocenti(d || []);
-      loadPagamenti();
+      // loadPagamenti viene chiamato dal useEffect sotto quando cambia selectedAnno
     };
     fetchData();
   }, []);
 
-  useEffect(() => { loadPagamenti(); }, [filters]);
+  useEffect(() => { loadPagamenti(); }, [filters, selectedAnno]);
 
   const loadPagamenti = async () => {
     setLoading(true);
@@ -47,9 +74,8 @@ export default function Pagamenti() {
         id, data_pagamento, importo, mese_riferimento, tipologia, note, anno_accademico,
         alunni(id, nome),
         docenti(id, nome)
-      `);
-      // Rimuovo l'order lato server di default qui, perché lo gestiamo lato client o misto
-      // Tuttavia per il primo load è utile avere un ordine sensato, ma verrà sovrascritto dal client sort
+      `)
+      .eq('anno_accademico', selectedAnno); // Filtro per Anno Accademico
 
     if (filters.alunno_id) query = query.eq('alunno_id', filters.alunno_id);
     if (filters.mese) query = query.eq('mese_riferimento', filters.mese);
@@ -115,7 +141,7 @@ export default function Pagamenti() {
         alunno_nome: payment.alunni?.nome || 'Alunno Sconosciuto',
         tipologia: payment.tipologia,
         mese_rif: payment.mese_riferimento,
-        aa: payment.anno_accademico || '2025/2026',
+        aa: payment.anno_accademico,
         importo: payment.importo,
         data_pagamento: new Date(payment.data_pagamento).toLocaleDateString('it-IT'),
         note: payment.note,
@@ -131,15 +157,32 @@ export default function Pagamenti() {
           <h2 className="text-xl font-light text-white flex items-center gap-2">
             <Euro className="text-accademia-red"/> Registro Pagamenti
           </h2>
-          <button 
-            onClick={() => handleOpenModal(null)}
-            className="flex items-center gap-2 bg-accademia-red hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm shadow-sm transition-colors"
-          >
-            <Plus size={16} /> Registra
-          </button>
+
+          <div className="flex items-center gap-3">
+            {/* Selettore Anno Header */}
+            <div className="flex items-center gap-2 bg-gray-800 rounded px-3 py-2 border border-gray-700">
+                <Filter size={14} className="text-gray-400"/>
+                <select 
+                    value={selectedAnno}
+                    onChange={(e) => setSelectedAnno(e.target.value)}
+                    className="bg-transparent text-white text-sm font-bold focus:outline-none cursor-pointer"
+                >
+                    {ANNI_ACCADEMICI.map(anno => (
+                        <option key={anno} value={anno} className="bg-gray-800 text-white">{anno}</option>
+                    ))}
+                </select>
+            </div>
+
+            <button 
+                onClick={() => handleOpenModal(null)}
+                className="flex items-center gap-2 bg-accademia-red hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm shadow-sm transition-colors"
+            >
+                <Plus size={16} /> Registra
+            </button>
+          </div>
         </div>
         
-        {/* FILTRI */}
+        {/* FILTRI EXTRA */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <select 
             className="bg-accademia-input border border-gray-700 text-white text-sm rounded px-3 py-2 focus:border-accademia-red focus:outline-none"
@@ -165,7 +208,6 @@ export default function Pagamenti() {
         <table className="w-full text-left text-sm">
           <thead className="bg-gray-900/50 text-gray-400 uppercase text-xs sticky top-0 backdrop-blur-sm z-10 select-none">
             <tr>
-              {/* Colonne Ordinabili */}
               <th 
                 className="px-6 py-3 font-semibold cursor-pointer hover:text-white group transition-colors"
                 onClick={() => handleSort('data_pagamento')}
@@ -259,13 +301,16 @@ function ModalPagamento({ payment, alunni, docenti, onClose, onSave }) {
     try {
       if (shouldPrint) setIsPrinting(true);
 
+      // Calcola automaticamente l'anno accademico in base alla data di pagamento selezionata
+      const annoCalc = getAcademicYearFromDate(formData.data_pagamento);
+
       const payload = {
         alunno_id: formData.alunno_id,
         docente_id: formData.docente_id || null,
         importo: parseFloat(formData.importo),
         data_pagamento: formData.data_pagamento,
         mese_riferimento: parseInt(formData.mese_riferimento),
-        anno_accademico: '2025/2026', 
+        anno_accademico: annoCalc, 
         tipologia: formData.tipologia,
         note: formData.note
       };

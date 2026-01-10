@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient';
-import { ClipboardList, TrendingUp, TrendingDown } from 'lucide-react';
+import { ClipboardList } from 'lucide-react';
 
 const MESI = [
+  { val: 0, label: 'ISCR' },
   { val: 9, label: 'SET' }, { val: 10, label: 'OTT' }, { val: 11, label: 'NOV' }, 
   { val: 12, label: 'DIC' }, { val: 1, label: 'GEN' }, { val: 2, label: 'FEB' }, 
   { val: 3, label: 'MAR' }, { val: 4, label: 'APR' }, { val: 5, label: 'MAG' }, 
@@ -13,16 +14,24 @@ export default function RiepilogoFinanziario() {
   const [reportData, setReportData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [totals, setTotals] = useState({ dovuto: 0, pagato: 0, diff: 0 });
-  const [monthlyTotals, setMonthlyTotals] = useState({}); // Totali per mese
+  const [monthlyTotals, setMonthlyTotals] = useState({});
+  const [quotaIscrizione, setQuotaIscrizione] = useState(30);
 
   useEffect(() => {
-    fetchReport();
+    const init = async () => {
+        // Fetch quota prima di tutto
+        const { data } = await supabase.from('tipi_lezioni').select('costo').eq('tipo', 'Iscrizione').single();
+        if (data) setQuotaIscrizione(data.costo);
+        
+        fetchReport(data ? data.costo : 30);
+    };
+    init();
   }, []);
 
-  const fetchReport = async () => {
+  const fetchReport = async (quotaValue) => {
     setLoading(true);
     try {
-      // 1. Fetch Docenti con Strumento
+      // 1. Fetch Docenti
       const { data: docenti } = await supabase
         .from('docenti')
         .select('id, nome, strumento')
@@ -32,9 +41,9 @@ export default function RiepilogoFinanziario() {
       // 2. Fetch Pagamenti
       const { data: pagamenti } = await supabase
         .from('pagamenti')
-        .select('docente_id, importo, mese_riferimento');
+        .select('docente_id, importo, mese_riferimento, tipologia');
 
-      // 3. Fetch Registro
+      // 3. Fetch Registro Lezioni
       const { data: lezioni } = await supabase
         .from('registro')
         .select(`
@@ -42,6 +51,11 @@ export default function RiepilogoFinanziario() {
           data_lezione, 
           tipi_lezioni ( costo )
         `);
+
+      // 4. Fetch Associazioni (per conteggio iscritti)
+      const { data: associazioni } = await supabase
+        .from('associazioni')
+        .select('docente_id');
 
       // --- ELABORAZIONE DATI ---
       const report = docenti.map(doc => {
@@ -52,11 +66,7 @@ export default function RiepilogoFinanziario() {
           mesi: {},
           totale: { dovuto: 0, pagato: 0, diff: 0 }
         };
-
-        MESI.forEach(m => {
-          row.mesi[m.val] = { dovuto: 0, pagato: 0, diff: 0 };
-        });
-
+        MESI.forEach(m => row.mesi[m.val] = { dovuto: 0, pagato: 0, diff: 0 });
         return row;
       });
 
@@ -65,7 +75,7 @@ export default function RiepilogoFinanziario() {
         return acc;
       }, {});
 
-      // Calcola DOVUTO
+      // A. Calcola DOVUTO LEZIONI
       if (lezioni) {
         lezioni.forEach(lez => {
           const idx = docIndex[lez.docente_id];
@@ -80,20 +90,37 @@ export default function RiepilogoFinanziario() {
         });
       }
 
-      // Calcola PAGATO
+      // B. Calcola DOVUTO ISCRIZIONI (Base: Associazioni * Quota Dinamica)
+      if (associazioni) {
+        associazioni.forEach(assoc => {
+            const idx = docIndex[assoc.docente_id];
+            if (idx !== undefined) {
+                // Per ogni alunno associato, aggiungiamo la quota al mese 0 (ISCR)
+                if (report[idx].mesi[0]) {
+                    report[idx].mesi[0].dovuto += quotaValue;
+                    report[idx].totale.dovuto += quotaValue;
+                }
+            }
+        });
+      }
+
+      // C. Calcola PAGATO
       if (pagamenti) {
         pagamenti.forEach(pay => {
           const idx = docIndex[pay.docente_id];
-          if (idx !== undefined && pay.mese_riferimento) {
-            if (report[idx].mesi[pay.mese_riferimento]) {
-              report[idx].mesi[pay.mese_riferimento].pagato += pay.importo;
+          if (idx !== undefined) {
+            let mese = pay.mese_riferimento;
+            if (pay.tipologia === 'Iscrizione') mese = 0;
+
+            if (report[idx].mesi[mese]) {
+              report[idx].mesi[mese].pagato += pay.importo;
               report[idx].totale.pagato += pay.importo;
             }
           }
         });
       }
 
-      // Calcola Totali Globali e Mensili
+      // D. Calcola Totali Globali e Mensili
       let globalDovuto = 0;
       let globalPagato = 0;
       const mTotals = {};
@@ -105,8 +132,6 @@ export default function RiepilogoFinanziario() {
       report.forEach(doc => {
         MESI.forEach(m => {
           doc.mesi[m.val].diff = doc.mesi[m.val].pagato - doc.mesi[m.val].dovuto;
-          
-          // Accumula totali mese per mese
           mTotals[m.val].dovuto += doc.mesi[m.val].dovuto;
           mTotals[m.val].pagato += doc.mesi[m.val].pagato;
           mTotals[m.val].diff += doc.mesi[m.val].diff;
@@ -138,14 +163,14 @@ export default function RiepilogoFinanziario() {
   return (
     <div className="flex flex-col h-full bg-accademia-card border border-gray-700 rounded-xl overflow-hidden shadow-xl">
       
-      {/* Header Compatto con Totali */}
+      {/* Header */}
       <div className="px-4 py-3 border-b border-gray-700 bg-gray-900/30 flex items-center justify-between gap-4 shrink-0">
         <div className="flex items-center gap-2">
             <ClipboardList className="text-accademia-red" size={20}/> 
             <h2 className="text-lg font-light text-white">Riepilogo Finanziario</h2>
         </div>
 
-        {/* Totali Globali Compatti */}
+        {/* Totali Globali */}
         <div className="flex gap-4 text-xs">
             <div className="flex flex-col items-end">
                 <span className="text-gray-500 uppercase font-bold tracking-wider">Dovuto</span>
@@ -181,7 +206,7 @@ export default function RiepilogoFinanziario() {
           
           <tbody className="divide-y divide-gray-700 text-base">
             
-            {/* RIGA TOTALI MENSILI (In evidenza in alto) */}
+            {/* RIGA TOTALI MENSILI */}
             <tr className="bg-gray-800 font-bold border-b-2 border-gray-600">
                 <td className="p-3 text-left border-r border-gray-600 sticky left-0 bg-gray-800 z-20 text-accademia-red uppercase tracking-wider text-sm font-extrabold border-b border-gray-600">
                     TOTALE MESE
@@ -210,18 +235,14 @@ export default function RiepilogoFinanziario() {
             {/* RIGHE DOCENTI */}
             {reportData.map(doc => (
               <tr key={doc.id} className="hover:bg-gray-800/30 transition-colors group border-b border-gray-700">
-                {/* Colonna Docente Sticky */}
                 <td className="p-4 text-left border-r border-gray-700 sticky left-0 bg-accademia-card group-hover:bg-gray-800 transition-colors z-10 shadow-r-lg border-b border-gray-700">
                   <div className="font-bold text-white text-base">{doc.nome}</div>
-                  {/* Strumento tra parentesi, font normale */}
                   <div className="text-sm text-gray-400 font-normal mt-0.5">({doc.strumento || '-'})</div>
                 </td>
                 
-                {/* Celle Mesi */}
                 {MESI.map(m => {
                   const data = doc.mesi[m.val];
                   const hasData = data.dovuto > 0 || data.pagato > 0;
-                  
                   return (
                     <td key={m.val} className="p-2 border-r border-gray-700 align-middle h-16 bg-transparent relative border-b border-gray-700">
                       {hasData ? (
@@ -243,7 +264,6 @@ export default function RiepilogoFinanziario() {
                   );
                 })}
 
-                {/* Colonna Totale Riga */}
                 <td className="p-3 bg-gray-900/40 border-l border-gray-700 font-mono align-middle text-center border-b border-gray-700">
                   <div className="flex flex-col gap-1 items-center">
                     <div className="text-sm text-gray-400 font-medium">D: € {doc.totale.dovuto}</div>

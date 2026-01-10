@@ -1,13 +1,9 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { supabase } from '../supabaseClient';
-import { Users, AlertCircle, CheckCircle2, XCircle, Plus, X, Printer, Save, DollarSign, List } from 'lucide-react';
-// We need to import html2pdf for receipt printing. 
-// Ideally this should be installed via npm: npm install html2pdf.js
-// If not available, we can use a CDN link dynamically or assume it's globally available if loaded in index.html.
-// For a React app, it's better to import it if installed, or use a dynamic import.
-// Assuming 'html2pdf.js' is installed or we use a workaround.
-import html2pdf from 'html2pdf.js';
+import { Users, X, Euro } from 'lucide-react';
+// Assicurati che il percorso sia corretto e che il file esista
+import { generateReceiptPDF } from '../utils/pdfGenerator';
 
 const MESI = [
   { val: 0, label: 'ISCR' },
@@ -22,20 +18,27 @@ export default function DettaglioPagamenti() {
   const [selectedDocenteId, setSelectedDocenteId] = useState('');
   const [loading, setLoading] = useState(false);
   const [matrix, setMatrix] = useState([]);
+  const [quotaIscrizione, setQuotaIscrizione] = useState(30); // Default
   
   // Modali
   const [showPayModal, setShowPayModal] = useState(false);
   const [payFormData, setPayFormData] = useState(null); 
   
   const [showDetailModal, setShowDetailModal] = useState(false);
-  const [detailData, setDetailData] = useState(null); // { title: '', items: [] }
+  const [detailData, setDetailData] = useState(null); 
 
+  // Caricamento Docenti e Quota Iscrizione
   useEffect(() => {
-    const fetchDocenti = async () => {
-      const { data } = await supabase.from('docenti').select('id, nome').eq('stato', 'Attivo').order('nome');
-      setDocenti(data || []);
+    const initData = async () => {
+      // Docenti
+      const { data: doc } = await supabase.from('docenti').select('id, nome').eq('stato', 'Attivo').order('nome');
+      setDocenti(doc || []);
+
+      // Quota Dinamica
+      const { data: quota } = await supabase.from('tipi_lezioni').select('costo').eq('tipo', 'Iscrizione').single();
+      if (quota) setQuotaIscrizione(quota.costo);
     };
-    fetchDocenti();
+    initData();
   }, []);
 
   useEffect(() => {
@@ -57,7 +60,8 @@ export default function DettaglioPagamenti() {
           alunniMap[row.alunno_id] = {
             id: row.alunno_id,
             nome: row.alunni.nome,
-            mesi: {} 
+            mesi: {},
+            totale: { dovuto: 0, pagato: 0 }
           };
           MESI.forEach(m => alunniMap[row.alunno_id].mesi[m.val] = { dovuto: 0, pagato: 0 });
         }
@@ -98,8 +102,18 @@ export default function DettaglioPagamenti() {
         });
       }
 
+      // Calcolo finali con quota dinamica
       Object.values(alunniMap).forEach(alu => {
-         alu.mesi[0].dovuto = 30; 
+         // Applica quota iscrizione dinamica
+         alu.mesi[0].dovuto = quotaIscrizione; 
+         
+         // Calcola totali riga
+         let totD = 0, totP = 0;
+         Object.values(alu.mesi).forEach(m => {
+            totD += m.dovuto;
+            totP += m.pagato;
+         });
+         alu.totale = { dovuto: totD, pagato: totP };
       });
 
       const result = Object.values(alunniMap).sort((a, b) => a.nome.localeCompare(b.nome));
@@ -126,10 +140,8 @@ export default function DettaglioPagamenti() {
     setShowPayModal(true);
   };
 
-  // --- NUOVA FUNZIONE: APRI DETTAGLIO CELLA ---
   const handleCellClick = async (alunnoId, mese, tipo) => {
-    // tipo = 'dovuto' | 'pagato'
-    setDetailData(null); // Reset
+    setDetailData(null); 
     setShowDetailModal(true);
 
     try {
@@ -139,10 +151,8 @@ export default function DettaglioPagamenti() {
       if (tipo === 'dovuto') {
         title = `Dettaglio Dovuto - Mese ${MESI.find(m=>m.val===mese)?.label}`;
         if (mese === 0) {
-             items = [{ data: '-', desc: 'Quota Iscrizione', importo: 30 }];
+             items = [{ data: '-', desc: 'Quota Iscrizione', importo: quotaIscrizione }];
         } else {
-             // Fetch lezioni del mese
-             // Nota: Filtrare per mese su data ISO richiede range o logica post-fetch
              const { data: lezioni } = await supabase
                 .from('registro')
                 .select(`data_lezione, tipi_lezioni(tipo, costo)`)
@@ -150,7 +160,6 @@ export default function DettaglioPagamenti() {
                 .eq('alunno_id', alunnoId)
                 .order('data_lezione');
              
-             // Filtra mese in JS
              items = (lezioni || [])
                 .filter(l => (new Date(l.data_lezione).getMonth() + 1) === mese)
                 .map(l => ({
@@ -160,7 +169,6 @@ export default function DettaglioPagamenti() {
                 }));
         }
       } else {
-        // PAGATO
         title = `Dettaglio Pagato - Mese ${MESI.find(m=>m.val===mese)?.label}`;
         let query = supabase
             .from('pagamenti')
@@ -189,7 +197,6 @@ export default function DettaglioPagamenti() {
       setDetailData({ title: 'Errore', items: [] });
     }
   };
-
 
   return (
     <div className="flex flex-col h-full bg-accademia-card border border-gray-700 rounded-xl overflow-hidden shadow-xl">
@@ -228,6 +235,10 @@ export default function DettaglioPagamenti() {
                 {MESI.map(m => (
                   <th key={m.val} className="p-2 min-w-[70px] border-r border-red-800 font-semibold text-xs border-b border-red-800">{m.label}</th>
                 ))}
+                
+                {/* NUOVA COLONNA TOTALE */}
+                <th className="p-2 min-w-[90px] border-r border-red-800 font-bold text-xs border-b border-red-800 bg-red-900">TOTALE</th>
+                
                 <th className="p-2 w-16 border-l border-red-800 bg-red-900 text-center text-xs border-b border-red-800">REG</th>
               </tr>
             </thead>
@@ -247,25 +258,20 @@ export default function DettaglioPagamenti() {
                       <td key={m.val} className="p-1 border-r border-gray-700 align-middle h-20 bg-transparent border-b border-gray-700">
                         {hasActivity ? (
                           <div className="flex flex-col items-center justify-center gap-1 w-full h-full">
-                            {/* Dovuto CLICCABILE */}
                             <div 
                                 className="flex justify-between w-full px-1 text-base text-gray-500 font-medium cursor-pointer hover:bg-gray-700/50 rounded"
                                 onClick={() => handleCellClick(row.id, m.val, 'dovuto')}
-                                title="Clicca per dettaglio dovuto"
                             >
                                 <span>D: <span className="text-gray-300 font-mono text-base border-b border-dotted border-gray-600">€ {cell.dovuto}</span></span>
                             </div>
                             
-                            {/* Pagato CLICCABILE */}
                             <div 
                                 className="flex justify-between w-full px-1 text-base text-gray-500 font-medium cursor-pointer hover:bg-gray-700/50 rounded"
                                 onClick={() => handleCellClick(row.id, m.val, 'pagato')}
-                                title="Clicca per dettaglio pagamenti"
                             >
                                 <span>P: <span className="text-white font-mono text-base border-b border-dotted border-gray-600">€ {cell.pagato}</span></span>
                             </div>
                             
-                            {/* Differenza (Delta) */}
                             <div className={`w-full text-center border-t border-gray-700 pt-1 font-bold text-base ${diff >= 0 ? 'text-green-500' : 'text-red-500'}`}>
                                 € {Math.abs(diff)}
                             </div>
@@ -277,13 +283,24 @@ export default function DettaglioPagamenti() {
                     );
                   })}
                   
+                  {/* CELLA TOTALE */}
+                  <td className="p-2 border-r border-gray-700 bg-gray-900/40 text-center border-b border-gray-700 align-middle">
+                     <div className="flex flex-col justify-center items-center gap-1 w-full h-full">
+                         <div className="text-gray-400 text-xs w-full text-center">D: € {row.totale.dovuto}</div>
+                         <div className="text-white font-bold text-xs w-full text-center">P: € {row.totale.pagato}</div>
+                         <div className={`text-xs font-bold border-t border-gray-600 w-full pt-1 ${row.totale.pagato - row.totale.dovuto >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                             € {Math.abs(row.totale.pagato - row.totale.dovuto)}
+                         </div>
+                     </div>
+                  </td>
+                  
                   <td className="p-2 border-l border-gray-700 bg-gray-900/40 text-center border-b border-gray-700">
                     <button 
                         onClick={() => handleOpenPaymentModal(row)}
                         className="p-2 bg-gray-800 hover:bg-accademia-red text-gray-300 hover:text-white rounded-full transition-colors shadow-sm"
                         title="Registra Pagamento"
                     >
-                        <DollarSign size={16} />
+                        <Euro size={16} />
                     </button>
                   </td>
                 </tr>
@@ -293,7 +310,6 @@ export default function DettaglioPagamenti() {
         )}
       </div>
 
-      {/* MODALE DI PAGAMENTO RAPIDO */}
       {showPayModal && (
         <ModalPagamentoRapido 
           data={payFormData} 
@@ -302,7 +318,6 @@ export default function DettaglioPagamenti() {
         />
       )}
 
-      {/* MODALE DETTAGLIO CELLA */}
       {showDetailModal && (
           <ModalDettaglioCella 
              data={detailData}
@@ -368,7 +383,9 @@ function ModalDettaglioCella({ data, onClose }) {
     );
 }
 
-// --- MODALE PAGAMENTO (Invariata ma con prop renaming per coerenza) ---
+// --- MODALE PAGAMENTO RAPIDO (Usa la utility centrale) ---
+import { Printer, Save } from 'lucide-react'; // Assicuriamoci di importare icone mancanti
+
 function ModalPagamentoRapido({ data, onClose, onSave }) {
   const [formData, setFormData] = useState({ ...data });
   const [isPrinting, setIsPrinting] = useState(false);
@@ -389,18 +406,19 @@ function ModalPagamentoRapido({ data, onClose, onSave }) {
         note: formData.note
       };
 
-      const { error } = await supabase.from('pagamenti').insert([payload]);
+      const { data: inserted, error } = await supabase.from('pagamenti').insert([payload]).select().single();
       if (error) throw error;
 
       if (shouldPrint) {
-        await printReceipt({
+        await generateReceiptPDF({
             alunno_nome: formData.alunno_nome,
             tipologia: formData.tipologia,
             mese_rif: formData.mese_riferimento,
             aa: payload.anno_accademico,
             importo: payload.importo,
             data_pagamento: new Date(payload.data_pagamento).toLocaleDateString('it-IT'),
-            note: payload.note
+            note: payload.note,
+            receipt_number: `P-${inserted?.id || Date.now()}`
         });
       }
 
@@ -410,97 +428,6 @@ function ModalPagamentoRapido({ data, onClose, onSave }) {
     } finally {
         setIsPrinting(false);
     }
-  };
-
-  const printReceipt = async (r) => {
-    const element = document.createElement('div');
-    element.innerHTML = `
-    <div style="padding: 40px; font-family: Arial, sans-serif; color: #000; background: #fff; width: 210mm; min-height: 297mm; box-sizing: border-box; position: relative;">
-        <!-- Header: Logo/Titolo a sinistra, Dati a destra -->
-        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 40px; border-bottom: 2px solid #b30000; padding-bottom: 20px;">
-            <div style="flex: 1;">
-                 <h1 style="font-size: 28px; font-weight: bold; color: #b30000; text-transform: uppercase; margin: 0;">Ricevuta</h1>
-                 <p style="font-size: 14px; color: #666; margin-top: 5px;">Copia per l'alunno</p>
-            </div>
-            <div style="text-align: right; font-size: 12px; color: #444; line-height: 1.5;">
-                <strong>Accademia della Musica</strong><br>
-                Vicolo del Guazzo 2<br>
-                29121 Piacenza<br>
-                C.F. 91117860337
-            </div>
-        </div>
-
-        <!-- Info Pagamento -->
-        <div style="margin-bottom: 40px;">
-            <table style="width: 100%; border-collapse: collapse;">
-                <tr>
-                    <td style="padding: 10px 0; font-size: 14px; color: #666; width: 150px;">Ricevuto da:</td>
-                    <td style="padding: 10px 0; font-size: 18px; font-weight: bold;">${r.alunno_nome}</td>
-                </tr>
-                <tr>
-                    <td style="padding: 10px 0; font-size: 14px; color: #666;">Data:</td>
-                    <td style="padding: 10px 0; font-size: 16px;">${r.data_pagamento}</td>
-                </tr>
-            </table>
-        </div>
-
-        <!-- Dettaglio -->
-        <table style="width: 100%; border-collapse: collapse; margin-bottom: 60px;">
-            <thead>
-                <tr style="background-color: #f8f8f8; border-bottom: 2px solid #ddd;">
-                    <td style="padding: 15px; font-weight: bold; text-transform: uppercase; font-size: 12px; letter-spacing: 1px;">Descrizione</td>
-                    <td style="padding: 15px; font-weight: bold; text-transform: uppercase; font-size: 12px; letter-spacing: 1px; text-align: right; width: 150px;">Importo</td>
-                </tr>
-            </thead>
-            <tbody>
-                <tr style="border-bottom: 1px solid #eee;">
-                    <td style="padding: 20px 15px;">
-                        <div style="font-size: 16px; font-weight: bold; margin-bottom: 5px;">${r.tipologia}</div>
-                        <div style="font-size: 14px; color: #666;">
-                            ${r.mese_rif && r.mese_rif != 0 ? `Mese di riferimento: ${MESI.find(m => m.val === r.mese_rif)?.label}` : ''}
-                            <span style="margin-left: 10px;">(A.A. ${r.aa || ''})</span>
-                        </div>
-                        ${r.note ? `<div style="font-size: 13px; color: #888; margin-top: 5px; font-style: italic;">Note: ${r.note}</div>` : ''}
-                    </td>
-                    <td style="padding: 20px 15px; text-align: right; font-size: 20px; font-weight: bold; color: #b30000;">
-                        € ${parseFloat(r.importo).toFixed(2)}
-                    </td>
-                </tr>
-            </tbody>
-        </table>
-
-        <!-- Totale -->
-        <div style="text-align: right; margin-bottom: 80px;">
-             <div style="display: inline-block; text-align: right;">
-                <span style="font-size: 14px; color: #666; margin-right: 20px;">TOTALE RICEVUTO</span>
-                <span style="font-size: 24px; font-weight: bold; color: #000;">€ ${parseFloat(r.importo).toFixed(2)}</span>
-             </div>
-        </div>
-
-        <!-- Footer / Firma -->
-        <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-top: 100px;">
-            <div style="font-size: 10px; color: #888;">
-                <p style="margin: 0;">Il presente documento costituisce ricevuta di pagamento.</p>
-                <p style="margin: 5px 0 0 0; font-weight: bold;">NON VALIDO AI FINI FISCALI</p>
-            </div>
-            
-            <div style="text-align: center;">
-                <div style="margin-bottom: 50px; font-size: 12px; color: #444;">Firma per quietanza</div>
-                <div style="border-bottom: 1px solid #000; width: 250px;"></div>
-            </div>
-        </div>
-    </div>
-    `;
-
-    const opt = {
-      margin: 0,
-      filename: `Ricevuta_${r.alunno_nome}.pdf`,
-      image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2 },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-    };
-    
-    html2pdf().set(opt).from(element).save();
   };
 
   return createPortal(
@@ -515,15 +442,12 @@ function ModalPagamentoRapido({ data, onClose, onSave }) {
         <form id="payForm" className="space-y-4">
           <div>
             <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Alunno</label>
-            <select 
-              value={formData.alunno_id} 
-              onChange={e => setFormData({...formData, alunno_id: e.target.value})}
-              className="w-full bg-accademia-input border border-gray-700 rounded-lg p-2.5 text-white focus:border-accademia-red focus:outline-none"
-              required
-            >
-              <option value="">Seleziona...</option>
-              {alunni.map(a => <option key={a.id} value={a.id}>{a.nome}</option>)}
-            </select>
+            <input 
+                type="text" 
+                value={formData.alunno_nome} 
+                disabled 
+                className="w-full bg-gray-800 border border-gray-600 rounded-lg p-2.5 text-gray-300 cursor-not-allowed"
+            />
           </div>
 
           <div className="grid grid-cols-2 gap-4">

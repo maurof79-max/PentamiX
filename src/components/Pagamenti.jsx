@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { supabase } from '../supabaseClient';
-import { Plus, X, Edit2, Trash2, DollarSign, Printer } from 'lucide-react';
-import html2pdf from 'html2pdf.js';
+import { Plus, X, Edit2, Trash2, Euro, Printer, Save, ChevronUp, ChevronDown } from 'lucide-react';
+// Assicurati che il percorso sia corretto
+import { generateReceiptPDF } from '../utils/pdfGenerator';
 
 const MESI = [
   { val: 0, label: 'ISCR' },
@@ -18,7 +19,10 @@ export default function Pagamenti() {
   const [alunni, setAlunni] = useState([]);
   const [docenti, setDocenti] = useState([]);
   
+  // Stati per filtri e ordinamento
   const [filters, setFilters] = useState({ alunno_id: '', mese: '' });
+  const [sortConfig, setSortConfig] = useState({ key: 'data_pagamento', direction: 'desc' });
+
   const [showModal, setShowModal] = useState(false);
   const [editingPay, setEditingPay] = useState(null);
 
@@ -43,8 +47,9 @@ export default function Pagamenti() {
         id, data_pagamento, importo, mese_riferimento, tipologia, note, anno_accademico,
         alunni(id, nome),
         docenti(id, nome)
-      `)
-      .order('data_pagamento', { ascending: false });
+      `);
+      // Rimuovo l'order lato server di default qui, perché lo gestiamo lato client o misto
+      // Tuttavia per il primo load è utile avere un ordine sensato, ma verrà sovrascritto dal client sort
 
     if (filters.alunno_id) query = query.eq('alunno_id', filters.alunno_id);
     if (filters.mese) query = query.eq('mese_riferimento', filters.mese);
@@ -55,82 +60,86 @@ export default function Pagamenti() {
     setLoading(false);
   };
 
+  // --- LOGICA ORDINAMENTO ---
+  const handleSort = (key) => {
+    let direction = 'asc';
+    if (sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    }
+    setSortConfig({ key, direction });
+  };
+
+  const sortedPagamenti = [...pagamenti].sort((a, b) => {
+    if (!sortConfig.key) return 0;
+    
+    let valA = a;
+    let valB = b;
+
+    // Gestione proprietà nidificate (es. alunni.nome)
+    const keys = sortConfig.key.split('.');
+    keys.forEach(k => {
+        valA = valA ? valA[k] : '';
+        valB = valB ? valB[k] : '';
+    });
+
+    // Gestione stringhe case-insensitive
+    if (typeof valA === 'string') valA = valA.toLowerCase();
+    if (typeof valB === 'string') valB = valB.toLowerCase();
+
+    if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
+    if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  const getSortIcon = (columnKey) => {
+    if (sortConfig.key !== columnKey) return <div className="w-4 h-4 ml-1 opacity-0 group-hover:opacity-30"></div>; // Placeholder
+    return sortConfig.direction === 'asc' 
+        ? <ChevronUp size={16} className="ml-1 text-accademia-red" /> 
+        : <ChevronDown size={16} className="ml-1 text-accademia-red" />;
+  };
+
   const handleOpenModal = (pay = null) => {
     setEditingPay(pay);
     setShowModal(true);
   };
 
   const handleDelete = async (id) => {
-    if (!confirm("Eliminare pagamento?")) return;
-    await supabase.from('pagamenti').delete().eq('id', id);
-    loadPagamenti();
+    if (!confirm("Eliminare definitivamente questo pagamento?")) return;
+    const { error } = await supabase.from('pagamenti').delete().eq('id', id);
+    if (error) alert("Errore eliminazione: " + error.message);
+    else loadPagamenti();
   };
 
-  // Funzione Stampa Ricevuta
-  const handlePrint = (p) => {
-    // 1. Creazione elemento HTML temporaneo per il PDF
-    const element = document.createElement('div');
-    element.innerHTML = `
-    <div style="padding: 40px; font-family: Arial, sans-serif; color: #000; background: #fff; width: 210mm; min-height: 297mm; box-sizing: border-box;">
-        <div style="text-align: center; margin-bottom: 30px;">
-            <h1 style="font-size: 24px; font-weight: bold; color: #b30000; text-transform: uppercase; margin: 0;">Ricevuta di Pagamento</h1>
-            <p style="font-size: 14px; color: #666; margin-top: 5px;">Accademia della Musica</p>
-        </div>
-        <div style="margin-bottom: 40px; border-top: 2px solid #b30000; padding-top: 20px;">
-            <p><strong>Ricevuto da:</strong> ${p.alunni?.nome}</p>
-            <p><strong>Data:</strong> ${new Date(p.data_pagamento).toLocaleDateString('it-IT')}</p>
-        </div>
-        <table style="width: 100%; border-collapse: collapse; margin-bottom: 40px;">
-            <tr style="background-color: #f5f5f5;">
-                <td style="padding: 15px; border: 1px solid #ddd; font-weight: bold;">Descrizione</td>
-                <td style="padding: 15px; border: 1px solid #ddd; font-weight: bold; text-align: right;">Importo</td>
-            </tr>
-            <tr>
-                <td style="padding: 15px; border: 1px solid #ddd;">
-                    ${p.tipologia} 
-                    ${p.mese_riferimento && p.mese_riferimento != 0 ? ` - Mese: ${MESI.find(m => m.val === p.mese_riferimento)?.label}` : ''}
-                    <br><span style="font-size: 12px; color: #666;">A.A. ${p.anno_accademico || ''}</span>
-                    ${p.note ? `<br><span style="font-size: 12px; color: #888;">Note: ${p.note}</span>` : ''}
-                </td>
-                <td style="padding: 15px; border: 1px solid #ddd; text-align: right; font-size: 18px;">
-                    € ${parseFloat(p.importo).toFixed(2)}
-                </td>
-            </tr>
-        </table>
-        <div style="text-align: center; margin-top: 80px; font-size: 12px; color: #888;">
-            <p>Documento non valido ai fini fiscali</p>
-            <div style="margin-top: 40px; border-top: 1px solid #000; width: 200px; display: inline-block; padding-top: 5px;">Firma</div>
-        </div>
-    </div>
-    `;
-
-    // 2. Opzioni PDF
-    const opt = {
-      margin: 0,
-      filename: `Ricevuta_${p.alunni?.nome.replace(/\s+/g,'_')}_${p.data_pagamento}.pdf`,
-      image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2 },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-    };
-    
-    // 3. Generazione (Uso diretto della variabile importata)
-    html2pdf().set(opt).from(element).save();
+  const handlePrint = async (payment) => {
+    await generateReceiptPDF({
+        alunno_nome: payment.alunni?.nome || 'Alunno Sconosciuto',
+        tipologia: payment.tipologia,
+        mese_rif: payment.mese_riferimento,
+        aa: payment.anno_accademico || '2025/2026',
+        importo: payment.importo,
+        data_pagamento: new Date(payment.data_pagamento).toLocaleDateString('it-IT'),
+        note: payment.note,
+        receipt_number: `P-${payment.id}`
+    });
   };
 
   return (
     <div className="flex flex-col h-full bg-accademia-card border border-gray-800 rounded-xl overflow-hidden shadow-xl">
+      {/* HEADER */}
       <div className="p-4 border-b border-gray-800 bg-gray-900/20">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
           <h2 className="text-xl font-light text-white flex items-center gap-2">
-            <DollarSign className="text-accademia-red"/> Registro Pagamenti
+            <Euro className="text-accademia-red"/> Registro Pagamenti
           </h2>
           <button 
             onClick={() => handleOpenModal(null)}
-            className="flex items-center gap-2 bg-accademia-red hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm shadow-sm"
+            className="flex items-center gap-2 bg-accademia-red hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm shadow-sm transition-colors"
           >
             <Plus size={16} /> Registra
           </button>
         </div>
+        
+        {/* FILTRI */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <select 
             className="bg-accademia-input border border-gray-700 text-white text-sm rounded px-3 py-2 focus:border-accademia-red focus:outline-none"
@@ -151,20 +160,47 @@ export default function Pagamenti() {
         </div>
       </div>
 
+      {/* TABELLA */}
       <div className="flex-1 overflow-auto p-0 custom-scrollbar">
         <table className="w-full text-left text-sm">
-          <thead className="bg-gray-900/50 text-gray-400 uppercase text-xs sticky top-0 backdrop-blur-sm z-10">
+          <thead className="bg-gray-900/50 text-gray-400 uppercase text-xs sticky top-0 backdrop-blur-sm z-10 select-none">
             <tr>
-              <th className="px-6 py-3 font-semibold">Data</th>
-              <th className="px-6 py-3 font-semibold">Alunno</th>
-              <th className="px-6 py-3 font-semibold">Tipologia</th>
-              <th className="px-6 py-3 font-semibold">Mese Rif.</th>
-              <th className="px-6 py-3 font-semibold text-right">Importo</th>
+              {/* Colonne Ordinabili */}
+              <th 
+                className="px-6 py-3 font-semibold cursor-pointer hover:text-white group transition-colors"
+                onClick={() => handleSort('data_pagamento')}
+              >
+                <div className="flex items-center">Data {getSortIcon('data_pagamento')}</div>
+              </th>
+              <th 
+                className="px-6 py-3 font-semibold cursor-pointer hover:text-white group transition-colors"
+                onClick={() => handleSort('alunni.nome')}
+              >
+                <div className="flex items-center">Alunno {getSortIcon('alunni.nome')}</div>
+              </th>
+              <th 
+                className="px-6 py-3 font-semibold cursor-pointer hover:text-white group transition-colors"
+                onClick={() => handleSort('tipologia')}
+              >
+                <div className="flex items-center">Tipologia {getSortIcon('tipologia')}</div>
+              </th>
+              <th 
+                className="px-6 py-3 font-semibold cursor-pointer hover:text-white group transition-colors"
+                onClick={() => handleSort('mese_riferimento')}
+              >
+                <div className="flex items-center">Mese Rif. {getSortIcon('mese_riferimento')}</div>
+              </th>
+              <th 
+                className="px-6 py-3 font-semibold text-right cursor-pointer hover:text-white group transition-colors"
+                onClick={() => handleSort('importo')}
+              >
+                <div className="flex items-center justify-end">Importo {getSortIcon('importo')}</div>
+              </th>
               <th className="px-6 py-3 font-semibold text-right">Azioni</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800">
-            {pagamenti.map(p => {
+            {sortedPagamenti.map(p => {
               const meseLabel = MESI.find(m => m.val === p.mese_riferimento)?.label || '-';
               return (
                 <tr key={p.id} className="hover:bg-gray-800/30 transition-colors group">
@@ -176,10 +212,10 @@ export default function Pagamenti() {
                   <td className="px-6 py-3 text-gray-400">{p.tipologia === 'Iscrizione' ? 'N/A' : meseLabel}</td>
                   <td className="px-6 py-3 text-right font-mono text-green-400 font-bold">€ {p.importo}</td>
                   <td className="px-6 py-3 text-right">
-                    <div className="flex justify-end gap-2 opacity-60 group-hover:opacity-100 transition-opacity">
-                      <button onClick={() => handlePrint(p)} className="p-1.5 hover:bg-gray-700 rounded text-green-400 transition-colors" title="Stampa Ricevuta"><Printer size={16}/></button>
-                      <button onClick={() => handleOpenModal(p)} className="p-1.5 hover:bg-gray-700 rounded text-blue-400 transition-colors" title="Modifica"><Edit2 size={16}/></button>
-                      <button onClick={() => handleDelete(p.id)} className="p-1.5 hover:bg-gray-700 rounded text-red-400 transition-colors" title="Elimina"><Trash2 size={16}/></button>
+                    <div className="flex justify-end gap-2 opacity-80 hover:opacity-100 transition-opacity">
+                      <button onClick={() => handlePrint(p)} className="p-1.5 bg-gray-700 hover:bg-gray-600 rounded text-green-400 transition-colors" title="Stampa Ricevuta"><Printer size={16}/></button>
+                      <button onClick={() => handleOpenModal(p)} className="p-1.5 bg-gray-700 hover:bg-gray-600 rounded text-blue-400 transition-colors" title="Modifica"><Edit2 size={16}/></button>
+                      <button onClick={() => handleDelete(p.id)} className="p-1.5 bg-gray-700 hover:bg-red-900/50 rounded text-red-400 transition-colors" title="Elimina"><Trash2 size={16}/></button>
                     </div>
                   </td>
                 </tr>
@@ -189,6 +225,7 @@ export default function Pagamenti() {
         </table>
       </div>
 
+      {/* MODALE DI REGISTRAZIONE/MODIFICA */}
       {showModal && (
         <ModalPagamento 
           payment={editingPay} 
@@ -202,6 +239,7 @@ export default function Pagamenti() {
   );
 }
 
+// --- COMPONENTE MODALE ---
 function ModalPagamento({ payment, alunni, docenti, onClose, onSave }) {
   const [formData, setFormData] = useState({
     id: payment?.id || null,
@@ -219,7 +257,7 @@ function ModalPagamento({ payment, alunni, docenti, onClose, onSave }) {
   const handleSubmit = async (e, shouldPrint = false) => {
     e.preventDefault();
     try {
-      if(shouldPrint) setIsPrinting(true);
+      if (shouldPrint) setIsPrinting(true);
 
       const payload = {
         alunno_id: formData.alunno_id,
@@ -232,18 +270,29 @@ function ModalPagamento({ payment, alunni, docenti, onClose, onSave }) {
         note: formData.note
       };
 
+      if (!payload.alunno_id) throw new Error("Seleziona un alunno");
+
+      let paymentId = formData.id;
       if (formData.id) {
-        await supabase.from('pagamenti').update(payload).eq('id', formData.id);
+        const { error } = await supabase.from('pagamenti').update(payload).eq('id', formData.id);
+        if (error) throw error;
       } else {
-        await supabase.from('pagamenti').insert([payload]);
+        const { data, error } = await supabase.from('pagamenti').insert([payload]).select().single();
+        if (error) throw error;
+        paymentId = data.id; 
       }
       
-      if(shouldPrint) {
-         // Recupera nome alunno per la stampa se necessario
-         const aluNome = alunni.find(a => a.id === formData.alunno_id)?.nome || '';
-         await printReceipt({
+      if (shouldPrint) {
+         const aluNome = alunni.find(a => a.id == formData.alunno_id)?.nome || 'Allievo';
+         await generateReceiptPDF({
              alunno_nome: aluNome,
-             ...payload
+             tipologia: payload.tipologia,
+             mese_rif: payload.mese_riferimento,
+             aa: payload.anno_accademico,
+             importo: payload.importo,
+             data_pagamento: new Date(payload.data_pagamento).toLocaleDateString('it-IT'),
+             note: payload.note,
+             receipt_number: paymentId ? `P-${paymentId}` : 'ND'
          });
       }
 
@@ -253,54 +302,6 @@ function ModalPagamento({ payment, alunni, docenti, onClose, onSave }) {
     } finally {
         setIsPrinting(false);
     }
-  };
-  
-  // Replicazione funzione stampa interna per la modale
-  const printReceipt = async (r) => {
-    const element = document.createElement('div');
-    element.innerHTML = `
-    <div style="padding: 40px; font-family: Arial, sans-serif; color: #000; background: #fff; width: 210mm; min-height: 297mm; box-sizing: border-box;">
-        <div style="text-align: center; margin-bottom: 30px;">
-            <h1 style="font-size: 24px; font-weight: bold; color: #b30000; text-transform: uppercase; margin: 0;">Ricevuta di Pagamento</h1>
-            <p style="font-size: 14px; color: #666; margin-top: 5px;">Accademia della Musica</p>
-        </div>
-        <div style="margin-bottom: 40px; border-top: 2px solid #b30000; padding-top: 20px;">
-            <p><strong>Ricevuto da:</strong> ${r.alunno_nome}</p>
-            <p><strong>Data:</strong> ${new Date(r.data_pagamento).toLocaleDateString('it-IT')}</p>
-        </div>
-        <table style="width: 100%; border-collapse: collapse; margin-bottom: 40px;">
-            <tr style="background-color: #f5f5f5;">
-                <td style="padding: 15px; border: 1px solid #ddd; font-weight: bold;">Descrizione</td>
-                <td style="padding: 15px; border: 1px solid #ddd; font-weight: bold; text-align: right;">Importo</td>
-            </tr>
-            <tr>
-                <td style="padding: 15px; border: 1px solid #ddd;">
-                    ${r.tipologia} 
-                    ${r.mese_riferimento && r.mese_riferimento != 0 ? ` - Mese: ${MESI.find(m => m.val === r.mese_riferimento)?.label}` : ''}
-                    <br><span style="font-size: 12px; color: #666;">A.A. ${r.anno_accademico || ''}</span>
-                    ${r.note ? `<br><span style="font-size: 12px; color: #888;">Note: ${r.note}</span>` : ''}
-                </td>
-                <td style="padding: 15px; border: 1px solid #ddd; text-align: right; font-size: 18px;">
-                    € ${parseFloat(r.importo).toFixed(2)}
-                </td>
-            </tr>
-        </table>
-        <div style="text-align: center; margin-top: 80px; font-size: 12px; color: #888;">
-            <p>Documento non valido ai fini fiscali</p>
-            <div style="margin-top: 40px; border-top: 1px solid #000; width: 200px; display: inline-block; padding-top: 5px;">Firma</div>
-        </div>
-    </div>
-    `;
-
-    const opt = {
-      margin: 0,
-      filename: `Ricevuta_${r.alunno_nome}.pdf`,
-      image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2 },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-    };
-    
-    html2pdf().set(opt).from(element).save();
   };
 
   return createPortal(
@@ -321,7 +322,7 @@ function ModalPagamento({ payment, alunni, docenti, onClose, onSave }) {
               className="w-full bg-accademia-input border border-gray-700 rounded-lg p-2.5 text-white focus:border-accademia-red focus:outline-none"
               required
             >
-              <option value="">Seleziona...</option>
+              <option value="">-- Seleziona Alunno --</option>
               {alunni.map(a => <option key={a.id} value={a.id}>{a.nome}</option>)}
             </select>
           </div>
@@ -375,7 +376,6 @@ function ModalPagamento({ payment, alunni, docenti, onClose, onSave }) {
             </div>
           </div>
 
-          {/* Docente Opzionale (per tracciare chi ha incassato o a chi si riferisce) */}
           <div>
             <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Docente (Opzionale)</label>
             <select 

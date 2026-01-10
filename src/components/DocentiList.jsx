@@ -44,10 +44,10 @@ export default function DocentiList({ userRole }) {
   if (loading) return <div className="p-8 text-center text-gray-400">Caricamento anagrafica...</div>;
 
   return (
-    <div className="p-0 relative">
-      {/* Toolbar */}
+    <div className="h-full flex flex-col relative">
+      {/* Toolbar - Fissa in alto */}
       {userRole === 'Admin' && (
-        <div className="p-4 border-b border-gray-800 flex justify-end">
+        <div className="p-4 border-b border-gray-800 flex justify-end shrink-0 bg-gray-900/20">
           <button 
             onClick={() => handleOpenModal(null)}
             className="flex items-center gap-2 bg-accademia-red hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm transition-colors shadow-sm"
@@ -58,16 +58,16 @@ export default function DocentiList({ userRole }) {
         </div>
       )}
 
-      {/* Tabella */}
-      <div className="overflow-x-auto">
+      {/* Tabella Scrollabile */}
+      <div className="flex-1 overflow-auto custom-scrollbar">
         <table className="w-full text-left text-sm">
-          <thead className="bg-gray-900/50 text-gray-400 uppercase text-xs">
+          <thead className="bg-gray-900/80 text-gray-400 uppercase text-xs sticky top-0 z-10 backdrop-blur-md">
             <tr>
-              <th className="px-6 py-4 font-semibold">Nome</th>
-              <th className="px-6 py-4 font-semibold">Strumento</th>
-              <th className="px-6 py-4 font-semibold">Contatti</th>
-              <th className="px-6 py-4 font-semibold text-center">Stato</th>
-              <th className="px-6 py-4 font-semibold text-right">Azioni</th>
+              <th className="px-6 py-4 font-semibold shadow-sm">Nome</th>
+              <th className="px-6 py-4 font-semibold shadow-sm">Strumento</th>
+              <th className="px-6 py-4 font-semibold shadow-sm">Contatti</th>
+              <th className="px-6 py-4 font-semibold text-center shadow-sm">Stato</th>
+              <th className="px-6 py-4 font-semibold text-right shadow-sm">Azioni</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800">
@@ -189,49 +189,20 @@ function ModalDocente({ docente, onClose, onSave, readOnly }) {
     }
   };
 
-  // Contenuto della modale con STILI INLINE per garantire il posizionamento
+  // Contenuto della modale
   const modalContent = (
-    <div 
-      className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
-      style={{ 
-        position: 'fixed', 
-        top: 0, left: 0, right: 0, bottom: 0, 
-        zIndex: 9999, 
-        display: 'flex', 
-        alignItems: 'center', 
-        justifyContent: 'center' 
-      }}
-    >
-      {/* Backdrop scuro */}
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+      {/* Backdrop */}
       <div 
-        className="absolute inset-0 bg-black/80 backdrop-blur-sm transition-opacity" 
-        style={{ 
-          position: 'absolute', 
-          inset: 0, 
-          backgroundColor: 'rgba(0,0,0,0.85)',
-          backdropFilter: 'blur(4px)'
-        }}
+        className="absolute inset-0 bg-black/80 backdrop-blur-sm" 
         onClick={onClose}
       ></div>
 
       {/* Finestra Modale */}
-      <div 
-        className="relative bg-accademia-card border border-gray-700 w-full max-w-2xl rounded-xl shadow-2xl flex flex-col max-h-[90vh]"
-        style={{
-          position: 'relative',
-          backgroundColor: '#1e1e1e',
-          border: '1px solid #374151',
-          maxWidth: '42rem',
-          width: '100%',
-          borderRadius: '0.75rem',
-          maxHeight: '90vh',
-          display: 'flex',
-          flexDirection: 'column'
-        }}
-      >
+      <div className="relative bg-accademia-card border border-gray-700 w-full max-w-2xl rounded-xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden animate-in fade-in zoom-in-95 duration-200">
         
         {/* Header */}
-        <div className="px-6 py-4 border-b border-gray-800 flex justify-between items-center bg-gray-900/30 rounded-t-xl">
+        <div className="px-6 py-4 border-b border-gray-800 flex justify-between items-center bg-gray-900/30">
           <h3 className="text-lg font-bold text-white tracking-wide">
             {readOnly ? 'Dettaglio Docente' : (docente ? 'Modifica Docente' : 'Nuovo Docente')}
           </h3>
@@ -241,7 +212,7 @@ function ModalDocente({ docente, onClose, onSave, readOnly }) {
         </div>
 
         {/* Body (Scrollable) */}
-        <div className="p-6 overflow-y-auto custom-scrollbar">
+        <div className="p-6 overflow-y-auto custom-scrollbar bg-accademia-card">
           <form id="docenteForm" onSubmit={handleSubmit} className="space-y-5">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <InputGroup label="Nome e Cognome" name="nome" value={formData.nome} onChange={handleChange} readOnly={readOnly} required placeholder="Es. Mario Rossi" />
@@ -281,7 +252,7 @@ function ModalDocente({ docente, onClose, onSave, readOnly }) {
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-800 flex justify-end gap-3 bg-gray-900/30 rounded-b-xl">
+        <div className="px-6 py-4 border-t border-gray-800 flex justify-end gap-3 bg-gray-900/30">
           <button 
             type="button"
             onClick={onClose}
@@ -303,7 +274,6 @@ function ModalDocente({ docente, onClose, onSave, readOnly }) {
     </div>
   );
 
-  // Utilizzo createPortal per garantire che la modale sia fuori dal flusso del layout
   return createPortal(modalContent, document.body);
 }
 

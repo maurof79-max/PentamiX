@@ -86,20 +86,14 @@ export default function Dashboard() {
     switch (activeView) {
       case 'utenti': return <UtentiList />;
       case 'docenti': return <DocentiList userRole={user.ruolo} />;
-      case 'alunni': return <AlunniList userRole={user.ruolo} />;
+      case 'alunni': return <AlunniList userRole={user.ruolo} userEmail={user.email} />;
       case 'tipi_lezioni': return <TipiLezioni userRole={user.ruolo} />;
-      
       case 'calendario_personale': 
-      case 'calendario_docenti': 
-        return <Calendario user={user} />;
-      
-      // Passiamo currentAcademicYear come prop fondamentale
+      case 'calendario_docenti': return <Calendario user={user} />;
       case 'registro_lezioni': return <RegistroLezioni user={user} currentGlobalYear={currentAcademicYear} />;
       case 'pagamenti': return <Pagamenti currentGlobalYear={currentAcademicYear} />; // Assumi che anche Pagamenti sia stato aggiornato
-      
       case 'dettaglio_pagamenti': return <DettaglioPagamenti />;
       case 'finanza': return <RiepilogoFinanziario />;
-      
       default: return <div className="p-10 text-center text-gray-500">Seleziona una voce dal menu</div>;
     }
   };

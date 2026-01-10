@@ -16,12 +16,14 @@ import TipiLezioni from '../components/TipiLezioni';
 import UtentiList from '../components/UtentiList'; 
 import RiepilogoFinanziario from '../components/RiepilogoFinanziario'; 
 import DettaglioPagamenti from '../components/DettaglioPagamenti'; 
+import ConfirmDialog from '../components/ConfirmDialog';
 
 export default function Dashboard() {
   const [user, setUser] = useState(null);
   const [activeView, setActiveView] = useState(''); 
   const [isSidebarOpen, setIsSidebarOpen] = useState(true); 
-  const [currentAcademicYear, setCurrentAcademicYear] = useState('2025/2026'); // Default Fallback
+  const [currentAcademicYear, setCurrentAcademicYear] = useState('2025/2026');
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const navigate = useNavigate();
 
   const LOGO_URL = "https://mqdpojtisighqjmyzdwz.supabase.co/storage/v1/object/public/images/logo-glow.png";
@@ -50,11 +52,13 @@ export default function Dashboard() {
     if (window.innerWidth < 768) setIsSidebarOpen(false);
   }, [navigate, activeView]);
 
-  const handleLogout = () => {
-    if(confirm("Vuoi davvero uscire?")) {
-      localStorage.removeItem('accademia_user');
-      navigate('/');
-    }
+  const handleLogoutClick = () => {
+    setShowLogoutConfirm(true);
+  };
+
+  const handleLogoutConfirm = () => {
+    localStorage.removeItem('accademia_user');
+    navigate('/');
   };
 
   const handleMenuClick = (viewId) => {
@@ -70,7 +74,7 @@ export default function Dashboard() {
   if (user.ruolo === 'Admin') menuItems.push({ id: 'utenti', label: 'Gestione Utenti', icon: <UserCog size={18}/> });
   if (user.ruolo !== 'Docente') menuItems.push({ id: 'docenti', label: 'Gestione Docenti', icon: <Users size={18}/> });
   menuItems.push({ id: 'alunni', label: 'Gestione Alunni', icon: <GraduationCap size={18}/> });
-  if (user.ruolo !== 'Docente') menuItems.push({ id: 'tipi_lezioni', label: 'Configurazioni & Anni', icon: <Settings size={18}/> }); // Label aggiornata
+  if (user.ruolo !== 'Docente') menuItems.push({ id: 'tipi_lezioni', label: 'Configurazioni & Anni', icon: <Settings size={18}/> });
   
   if (user.ruolo === 'Docente') menuItems.push({ id: 'calendario_personale', label: 'Il mio Calendario', icon: <Calendar size={18}/> });
   else menuItems.push({ id: 'calendario_docenti', label: 'Calendario Docenti', icon: <Calendar size={18}/> });
@@ -91,7 +95,7 @@ export default function Dashboard() {
       case 'calendario_personale': 
       case 'calendario_docenti': return <Calendario user={user} />;
       case 'registro_lezioni': return <RegistroLezioni user={user} currentGlobalYear={currentAcademicYear} />;
-      case 'pagamenti': return <Pagamenti currentGlobalYear={currentAcademicYear} />; // Assumi che anche Pagamenti sia stato aggiornato
+      case 'pagamenti': return <Pagamenti currentGlobalYear={currentAcademicYear} />;
       case 'dettaglio_pagamenti': return <DettaglioPagamenti />;
       case 'finanza': return <RiepilogoFinanziario />;
       default: return <div className="p-10 text-center text-gray-500">Seleziona una voce dal menu</div>;
@@ -136,13 +140,34 @@ export default function Dashboard() {
               <div className="text-right leading-tight"><div className="text-sm font-medium text-white">{user.nome_esteso}</div><div className="text-[10px] text-accademia-red uppercase tracking-wider font-bold">{user.ruolo}</div></div>
               <div className="w-8 h-8 rounded-full bg-gradient-to-br from-accademia-red to-red-900 flex items-center justify-center text-white font-bold text-sm shadow-md border border-red-800/30">{user.nome_esteso.charAt(0).toUpperCase()}</div>
           </div>
-          <div className="flex items-center justify-end"><button onClick={handleLogout} className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-400 hover:text-white hover:bg-red-900/20 hover:border-red-900/30 border border-transparent rounded-lg transition-all" title="Disconnetti"><LogOut size={18} /><span className="hidden sm:inline">Esci</span></button></div>
+          <div className="flex items-center justify-end">
+            <button 
+              onClick={handleLogoutClick} 
+              className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-400 hover:text-white hover:bg-red-900/20 hover:border-red-900/30 border border-transparent rounded-lg transition-all" 
+              title="Disconnetti"
+            >
+              <LogOut size={18} />
+              <span className="hidden sm:inline">Esci</span>
+            </button>
+          </div>
         </header>
         <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6 z-10 custom-scrollbar relative w-full">
             {isSidebarOpen && (<div className="fixed inset-0 bg-black/50 z-20 md:hidden backdrop-blur-sm" onClick={() => setIsSidebarOpen(false)}></div>)}
             <div className="max-w-[1800px] mx-auto h-full flex flex-col"><div className="flex-1 bg-accademia-card border border-gray-800 rounded-xl shadow-2xl relative overflow-hidden flex flex-col h-full">{renderContent()}</div></div>
         </div>
       </main>
+
+      <ConfirmDialog
+        isOpen={showLogoutConfirm}
+        type="warning"
+        title="Conferma Uscita"
+        message="Sei sicuro di voler uscire dall'applicazione?"
+        confirmText="Esci"
+        cancelText="Annulla"
+        showCancel={true}
+        onConfirm={handleLogoutConfirm}
+        onCancel={() => setShowLogoutConfirm(false)}
+      />
     </div>
   );
 }

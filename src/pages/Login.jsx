@@ -11,10 +11,9 @@ export default function Login() {
   const [view, setView] = useState('login'); // 'login' | 'forgot'
   const navigate = useNavigate();
 
-  // URL Logo Accademia (Supabase Storage)
   const LOGO_URL = "https://mqdpojtisighqjmyzdwz.supabase.co/storage/v1/object/public/images/logo-glow.png";
 
-  // Funzione Hash SHA-256 (per login legacy)
+  // Funzione Hash SHA-256
   async function sha256(message) {
     const msgBuffer = new TextEncoder().encode(message);
     const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
@@ -28,10 +27,8 @@ export default function Login() {
     setError(null);
 
     try {
-      // 1. Hash password
       const hash = await sha256(password);
       
-      // 2. Verifica su tabella custom 'utenti'
       const { data, error } = await supabase
         .from('utenti')
         .select('*')
@@ -42,7 +39,6 @@ export default function Login() {
       if (error || !data) throw new Error("Credenziali non valide");
       if (data.stato !== 'Attivo') throw new Error("Account non attivo o sospeso");
 
-      // 3. Salva sessione e vai
       localStorage.setItem('accademia_user', JSON.stringify(data));
       navigate('/dashboard');
 
@@ -60,15 +56,12 @@ export default function Login() {
     setSuccessMsg(null);
 
     try {
-      // 1. Controllo esistenza utente
       const { data: user } = await supabase.from('utenti').select('*').eq('email', email).single();
       if (!user) throw new Error("Email non trovata.");
 
-      // 2. Generazione Token
       const token = crypto.randomUUID();
-      const scadenza = Date.now() + 3600000; // 1 ora
+      const scadenza = Date.now() + 3600000;
 
-      // 3. Salvataggio Token su DB
       const { error: updateError } = await supabase
         .from('utenti')
         .update({ token: token, token_scadenza: scadenza })
@@ -76,17 +69,12 @@ export default function Login() {
 
       if (updateError) throw updateError;
 
-      // 4. INVIO MAIL (Simulato per ora - Vedi Console)
-      // In un'app React pura senza backend mailer, non possiamo inviare email direttamente in modo sicuro.
-      // Per ora mostriamo il link in console per testare il flusso.
       const resetLink = `${window.location.origin}/reset-password?token=${token}`;
       console.log("--- LINK DI RECUPERO (SIMULAZIONE MAIL) ---");
       console.log(resetLink);
       console.log("-------------------------------------------");
 
       setSuccessMsg("Istruzioni inviate! (Controlla la Console del browser per il link di test)");
-      
-      // In produzione, qui chiameresti una Edge Function di Supabase o un servizio come EmailJS
       
     } catch (err) {
       setError(err.message);
@@ -97,16 +85,13 @@ export default function Login() {
 
   return (
     <div className="flex items-center justify-center min-h-screen bg-accademia-dark relative overflow-hidden">
-      {/* Background decoration */}
       <div className="absolute inset-0 bg-gradient-to-b from-black/80 to-accademia-dark z-0"></div>
       <div className="absolute top-[-50%] left-[-50%] w-[200%] h-[200%] bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-5 z-0 animate-pulse"></div>
 
       <div className="w-full max-w-md p-8 bg-accademia-card border border-gray-800 rounded-xl shadow-2xl z-10 backdrop-blur-sm relative">
         
-        {/* Logo & Header */}
         <div className="text-center mb-8 flex flex-col items-center">
           <div className="w-48 h-48 mb-2 relative flex items-center justify-center">
-            {/* Glow effect behind logo */}
             <div className="absolute inset-0 bg-accademia-red/20 blur-3xl rounded-full"></div>
             <img 
               src={LOGO_URL} 
@@ -120,7 +105,6 @@ export default function Login() {
           <p className="text-xs text-accademia-muted mt-2 uppercase tracking-widest">Accademia della Musica</p>
         </div>
 
-        {/* Messages */}
         {error && (
           <div className="mb-6 p-3 bg-red-900/40 border border-red-800 text-red-200 rounded text-sm text-center animate-in fade-in slide-in-from-top-2">
             {error}
@@ -140,6 +124,7 @@ export default function Login() {
               <input
                 type="email"
                 required
+                tabIndex={1}
                 className="w-full px-4 py-3 bg-accademia-input border border-gray-700 rounded-lg text-white placeholder-gray-600 focus:outline-none focus:border-accademia-red focus:ring-1 focus:ring-accademia-red transition-all"
                 placeholder="nome@esempio.com"
                 value={email}
@@ -151,6 +136,7 @@ export default function Login() {
                 <label className="block text-xs font-bold text-gray-500 uppercase">Password</label>
                 <button 
                     type="button"
+                    tabIndex={-1}
                     onClick={() => { setError(null); setView('forgot'); }}
                     className="text-xs text-accademia-red hover:text-red-400 transition-colors"
                 >
@@ -160,6 +146,7 @@ export default function Login() {
               <input
                 type="password"
                 required
+                tabIndex={2}
                 className="w-full px-4 py-3 bg-accademia-input border border-gray-700 rounded-lg text-white placeholder-gray-600 focus:outline-none focus:border-accademia-red focus:ring-1 focus:ring-accademia-red transition-all"
                 placeholder="••••••••"
                 value={password}
@@ -169,6 +156,7 @@ export default function Login() {
             
             <button
               type="submit"
+              tabIndex={3}
               disabled={loading}
               className="w-full py-3 px-4 bg-accademia-red hover:bg-red-700 text-white font-bold rounded-lg transition-all duration-300 shadow-lg shadow-red-900/30 hover:shadow-red-900/50 disabled:opacity-50 disabled:cursor-not-allowed mt-2"
             >
@@ -221,7 +209,6 @@ export default function Login() {
 
       </div>
       
-      {/* Footer Info */}
       <div className="absolute bottom-4 text-center w-full text-[10px] text-gray-600 uppercase tracking-widest z-10">
           © {new Date().getFullYear()} Accademia della Musica • Gestionale v2.0
       </div>

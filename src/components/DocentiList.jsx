@@ -2,12 +2,22 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { supabase } from '../supabaseClient';
 import { Edit2, Trash2, Eye, Plus, X, Check } from 'lucide-react';
+import ConfirmDialog from './ConfirmDialog';
 
 export default function DocentiList({ userRole }) {
   const [docenti, setDocenti] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingDocente, setEditingDocente] = useState(null);
+  const [confirmDialog, setConfirmDialog] = useState({ 
+    isOpen: false, 
+    type: 'danger',
+    title: '',
+    message: '',
+    confirmText: 'Conferma',
+    onConfirm: null,
+    showCancel: true
+  });
 
   // --- FETCH DATI ---
   const fetchDocenti = async () => {
@@ -32,12 +42,95 @@ export default function DocentiList({ userRole }) {
     setShowModal(true);
   };
 
-  const handleDelete = async (id) => {
-    if (!window.confirm("Eliminare definitivamente questo docente?")) return;
-    
-    const { error } = await supabase.from('docenti').delete().eq('id', id);
-    if (error) alert("Errore eliminazione: " + error.message);
-    else fetchDocenti();
+  const handleDeleteClick = async (docente) => {
+    // Verifica se ci sono lezioni associate
+    const { data: lezioni, error } = await supabase
+      .from('registro')
+      .select('id')
+      .eq('docente_id', docente.id)
+      .limit(1);
+
+    if (error) {
+      console.error("Errore verifica lezioni:", error);
+      setConfirmDialog({
+        isOpen: true,
+        type: 'danger',
+        title: 'Errore',
+        message: 'Si è verificato un errore durante la verifica. Riprova.',
+        confirmText: 'OK',
+        showCancel: false,
+        onConfirm: () => setConfirmDialog(prev => ({ ...prev, isOpen: false }))
+      });
+      return;
+    }
+
+    if (lezioni && lezioni.length > 0) {
+      // Ci sono lezioni: imposta come Non Attivo
+      setConfirmDialog({
+        isOpen: true,
+        type: 'warning',
+        title: 'Impossibile Eliminare',
+        message: `Il docente "${docente.nome}" ha lezioni registrate nel sistema.\n\nNon può essere eliminato, ma verrà impostato come "Non Attivo".`,
+        confirmText: 'Imposta Non Attivo',
+        cancelText: 'Annulla',
+        showCancel: true,
+        onConfirm: async () => {
+          const { error: updateError } = await supabase
+            .from('docenti')
+            .update({ stato: 'Non Attivo' })
+            .eq('id', docente.id);
+
+          if (updateError) {
+            console.error("Errore aggiornamento stato:", updateError);
+            setConfirmDialog({
+              isOpen: true,
+              type: 'danger',
+              title: 'Errore',
+              message: 'Errore durante l\'aggiornamento dello stato.',
+              confirmText: 'OK',
+              showCancel: false,
+              onConfirm: () => setConfirmDialog(prev => ({ ...prev, isOpen: false }))
+            });
+          } else {
+            fetchDocenti();
+            setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+          }
+        }
+      });
+    } else {
+      // Nessuna lezione: elimina
+      setConfirmDialog({
+        isOpen: true,
+        type: 'danger',
+        title: 'Elimina Docente',
+        message: `Sei sicuro di voler eliminare il docente "${docente.nome}"?\n\nQuesta azione non può essere annullata.`,
+        confirmText: 'Elimina',
+        cancelText: 'Annulla',
+        showCancel: true,
+        onConfirm: async () => {
+          const { error: deleteError } = await supabase
+            .from('docenti')
+            .delete()
+            .eq('id', docente.id);
+
+          if (deleteError) {
+            console.error("Errore eliminazione:", deleteError);
+            setConfirmDialog({
+              isOpen: true,
+              type: 'danger',
+              title: 'Errore',
+              message: 'Errore durante l\'eliminazione: ' + deleteError.message,
+              confirmText: 'OK',
+              showCancel: false,
+              onConfirm: () => setConfirmDialog(prev => ({ ...prev, isOpen: false }))
+            });
+          } else {
+            fetchDocenti();
+            setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+          }
+        }
+      });
+    }
   };
 
   // --- RENDER TABLE ---
@@ -102,7 +195,7 @@ export default function DocentiList({ userRole }) {
                           <Edit2 size={16} />
                         </button>
                         <button 
-                          onClick={() => handleDelete(doc.id)}
+                          onClick={() => handleDeleteClick(doc)}
                           className="p-1.5 hover:bg-gray-700 rounded-md text-red-400 transition-colors" 
                           title="Elimina"
                         >
@@ -135,6 +228,18 @@ export default function DocentiList({ userRole }) {
           readOnly={userRole !== 'Admin'}
         />
       )}
+
+      <ConfirmDialog
+        isOpen={confirmDialog.isOpen}
+        type={confirmDialog.type}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmText={confirmDialog.confirmText}
+        cancelText={confirmDialog.cancelText}
+        showCancel={confirmDialog.showCancel}
+        onConfirm={confirmDialog.onConfirm}
+        onCancel={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
+      />
     </div>
   );
 }

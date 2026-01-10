@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { supabase } from '../supabaseClient';
 import { Plus, X, Edit2, Trash2, Search, ArrowUpDown, AlertTriangle } from 'lucide-react';
+import ConfirmDialog from './ConfirmDialog';
 
 const MESI = [
   { val: 9, label: 'Settembre' }, { val: 10, label: 'Ottobre' }, { val: 11, label: 'Novembre' }, 
@@ -42,6 +43,16 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
   const [sortConfig, setSortConfig] = useState({ key: 'data_lezione', direction: 'desc' });
   const [showModal, setShowModal] = useState(false);
   const [editingLezione, setEditingLezione] = useState(null);
+  
+  const [confirmDialog, setConfirmDialog] = useState({ 
+    isOpen: false, 
+    type: 'danger',
+    title: '',
+    message: '',
+    confirmText: 'Conferma',
+    onConfirm: null,
+    showCancel: true
+  });
 
   // --- 1. Carica Anni ---
   useEffect(() => {
@@ -96,15 +107,10 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
     if (!filters.anno) return; 
     setLoading(true);
     try {
-      // Calcolo date per sicurezza
       const [startYear, endYear] = filters.anno.split('/').map(Number);
       const startDate = `${startYear}-09-01`;
       const endDate = `${endYear}-08-31`;
 
-      /* IMPORTANTE: Qui sotto uso 'tipi_lezioni' perché è la tabella usata in RiepilogoFinanziario.
-         Se hai migrato la FK su 'tariffe', cambia 'tipi_lezioni ( tipo )' in 'tariffe ( tipo_lezione )'.
-         Se usi 'tipi_lezioni', assicurati che la colonna da visualizzare sia 'tipo' o 'tipo_lezione'.
-      */
       let query = supabase
         .from('registro')
         .select(`
@@ -131,7 +137,15 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
       setLezioni(filteredData);
     } catch (err) { 
         console.error("Errore registro:", err); 
-        alert("Errore caricamento lezioni. Controlla la console.");
+        setConfirmDialog({
+          isOpen: true,
+          type: 'danger',
+          title: 'Errore',
+          message: 'Errore caricamento lezioni. Controlla la console per dettagli.',
+          confirmText: 'OK',
+          showCancel: false,
+          onConfirm: () => setConfirmDialog(prev => ({ ...prev, isOpen: false }))
+        });
     } finally { 
         setLoading(false); 
     }
@@ -143,13 +157,39 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
       const annoToCheck = targetAnno || filters.anno;
       if (user.ruolo === 'Docente') {
           if (annoToCheck !== getCurrentAcademicYear()) {
-              alert("Non puoi modificare lezioni di anni passati.");
+              setConfirmDialog({
+                isOpen: true,
+                type: 'warning',
+                title: 'Operazione Non Consentita',
+                message: 'Non puoi modificare lezioni di anni passati.',
+                confirmText: 'OK',
+                showCancel: false,
+                onConfirm: () => setConfirmDialog(prev => ({ ...prev, isOpen: false }))
+              });
               return false;
           }
           return true;
       }
       if (user.ruolo === 'Gestore' && annoToCheck !== getCurrentAcademicYear()) {
-          return confirm(`Stai modificando lo storico ${annoToCheck}. Continuare?`);
+          return new Promise((resolve) => {
+            setConfirmDialog({
+              isOpen: true,
+              type: 'warning',
+              title: 'Modifica Storico',
+              message: `Stai modificando lo storico ${annoToCheck}.\n\nSei sicuro di voler continuare?`,
+              confirmText: 'Continua',
+              cancelText: 'Annulla',
+              showCancel: true,
+              onConfirm: () => {
+                setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+                resolve(true);
+              },
+              onCancel: () => {
+                setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+                resolve(false);
+              }
+            });
+          });
       }
       return true; 
   };
@@ -167,7 +207,6 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
         case 'data_lezione': valA = new Date(a.data_lezione); valB = new Date(b.data_lezione); break;
         case 'docente': valA = a.docenti?.nome?.toLowerCase()||''; valB = b.docenti?.nome?.toLowerCase()||''; break;
         case 'alunno': valA = a.alunni?.nome?.toLowerCase()||''; valB = b.alunni?.nome?.toLowerCase()||''; break;
-        // Adattato per tipi_lezioni.tipo oppure tariffe.tipo_lezione
         case 'tipo': valA = (a.tipi_lezioni?.tipo || a.tariffe?.tipo_lezione || '').toLowerCase(); 
                      valB = (b.tipi_lezioni?.tipo || b.tariffe?.tipo_lezione || '').toLowerCase(); break;
         default: return 0;
@@ -175,11 +214,52 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
     return (valA < valB ? -1 : 1) * (sortConfig.direction === 'asc' ? 1 : -1);
   });
 
-  const handleDelete = async (row) => {
-    if(!checkPermission(row.anno_accademico)) return;
-    if(!confirm("Eliminare questa lezione?")) return;
-    const { error } = await supabase.from('registro').delete().eq('id', row.id);
-    if(!error) fetchLezioni();
+  const handleDeleteClick = async (row) => {
+    const hasPermission = await checkPermission(row.anno_accademico);
+    if (!hasPermission) return;
+
+    setConfirmDialog({
+      isOpen: true,
+      type: 'danger',
+      title: 'Elimina Lezione',
+      message: `Sei sicuro di voler eliminare questa lezione?\n\nData: ${new Date(row.data_lezione).toLocaleDateString('it-IT')}\nAlunno: ${row.alunni?.nome}\n\nQuesta azione non può essere annullata.`,
+      confirmText: 'Elimina',
+      cancelText: 'Annulla',
+      showCancel: true,
+      onConfirm: async () => {
+        const { error } = await supabase.from('registro').delete().eq('id', row.id);
+        if (error) {
+          setConfirmDialog({
+            isOpen: true,
+            type: 'danger',
+            title: 'Errore',
+            message: 'Errore durante l\'eliminazione: ' + error.message,
+            confirmText: 'OK',
+            showCancel: false,
+            onConfirm: () => setConfirmDialog(prev => ({ ...prev, isOpen: false }))
+          });
+        } else {
+          fetchLezioni();
+          setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+        }
+      }
+    });
+  };
+
+  const handleEditClick = async (row) => {
+    const hasPermission = await checkPermission(row.anno_accademico);
+    if (hasPermission) {
+      setEditingLezione(row);
+      setShowModal(true);
+    }
+  };
+
+  const handleNewLezione = async () => {
+    const hasPermission = await checkPermission(filters.anno);
+    if (hasPermission) {
+      setEditingLezione(null);
+      setShowModal(true);
+    }
   };
 
   return (
@@ -193,7 +273,7 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
           
           {(user.ruolo !== 'Docente' || filters.anno === getCurrentAcademicYear()) && (
               <button 
-                onClick={() => { setEditingLezione(null); setShowModal(true); }}
+                onClick={handleNewLezione}
                 className="flex items-center gap-2 bg-accademia-red hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm transition-colors shadow-sm"
               >
                 <Plus size={16} /> Nuova Lezione
@@ -252,14 +332,13 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
                   <td className="px-6 py-3 font-mono text-gray-300">{new Date(row.data_lezione).toLocaleDateString('it-IT')}</td>
                   <td className="px-6 py-3 text-white">{row.docenti?.nome}</td>
                   <td className="px-6 py-3 font-medium text-white">{row.alunni?.nome}</td>
-                  {/* Fallback visualizzazione tipo lezione */}
                   <td className="px-6 py-3 text-gray-400">
                       {row.tipi_lezioni?.tipo || row.tariffe?.tipo_lezione || '-'}
                   </td>
                   <td className="px-6 py-3 text-right">
                     <div className="flex justify-end gap-2 opacity-60 group-hover:opacity-100 transition-opacity">
-                      <button onClick={() => { if(checkPermission(row.anno_accademico)) { setEditingLezione(row); setShowModal(true); } }} className="p-1.5 hover:bg-gray-700 rounded text-blue-400"><Edit2 size={16}/></button>
-                      <button onClick={() => handleDelete(row)} className="p-1.5 hover:bg-gray-700 rounded text-red-400"><Trash2 size={16}/></button>
+                      <button onClick={() => handleEditClick(row)} className="p-1.5 hover:bg-gray-700 rounded text-blue-400"><Edit2 size={16}/></button>
+                      <button onClick={() => handleDeleteClick(row)} className="p-1.5 hover:bg-gray-700 rounded text-red-400"><Trash2 size={16}/></button>
                     </div>
                   </td>
                 </tr>
@@ -280,6 +359,18 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
           onSave={() => { setShowModal(false); fetchLezioni(); }}
         />
       )}
+
+      <ConfirmDialog
+        isOpen={confirmDialog.isOpen}
+        type={confirmDialog.type}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmText={confirmDialog.confirmText}
+        cancelText={confirmDialog.cancelText}
+        showCancel={confirmDialog.showCancel}
+        onConfirm={confirmDialog.onConfirm}
+        onCancel={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
+      />
     </div>
   );
 }
@@ -290,56 +381,180 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
     id: lezione?.id || null,
     docente_id: lezione?.docenti?.id || (user.ruolo === 'Docente' ? user.id_collegato : ''),
     alunno_id: lezione?.alunni?.id || '',
-    // Se modifichi una vecchia lezione con FK su tipi_lezioni, questo campo potrebbe essere problematico
-    // Qui assumiamo che tu stia inserendo nuovi dati collegati a 'tariffe'
     tipo_lezione_id: lezione?.tipo_lezione_id || '', 
     data_lezione: lezione?.data_lezione ? lezione.data_lezione.slice(0, 10) : new Date().toISOString().slice(0, 10)
   });
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    
     try {
+      let tipoLezioneId = formData.tipo_lezione_id;
+
+      // Solo per NUOVI inserimenti: converti tariffa -> tipo_lezione
+      if (!formData.id) {
+        // Verifica che tipo_lezione_id non sia vuoto
+        if (!formData.tipo_lezione_id) {
+          alert("Seleziona un tipo di lezione");
+          return;
+        }
+        
+        // 1. Recupera la tariffa selezionata (confronto flessibile string/number)
+        const tariffaSelezionata = tariffe.find(t => String(t.id) === String(formData.tipo_lezione_id));
+        
+        if (!tariffaSelezionata) {
+          alert("Errore: tariffa non trovata. Riprova.");
+          console.error('Tariffa non trovata! ID cercato:', formData.tipo_lezione_id);
+          console.error('Tariffe disponibili:', tariffe);
+          return;
+        }
+
+        // 2. Cerca se esiste già un record in tipi_lezioni con questo tipo e costo
+        const { data: existingTipo, error: searchError } = await supabase
+          .from('tipi_lezioni')
+          .select('id')
+          .eq('tipo', tariffaSelezionata.tipo_lezione)
+          .eq('costo', tariffaSelezionata.costo)
+          .maybeSingle();
+
+        if (searchError && searchError.code !== 'PGRST116') {
+          throw searchError;
+        }
+
+        if (existingTipo) {
+          // Usa l'ID esistente
+          tipoLezioneId = existingTipo.id;
+        } else {
+          // Crea nuovo record in tipi_lezioni
+          const newTipoId = 'TL' + Date.now();
+          
+          const { error: insertTipoError } = await supabase
+            .from('tipi_lezioni')
+            .insert([{
+              id: newTipoId,
+              tipo: tariffaSelezionata.tipo_lezione,
+              costo: tariffaSelezionata.costo
+            }]);
+
+          if (insertTipoError) throw insertTipoError;
+          
+          tipoLezioneId = newTipoId;
+        }
+      }
+
+      // 3. Salva nel registro
       const payload = {
         docente_id: formData.docente_id,
         alunno_id: formData.alunno_id,
-        // Se la colonna sul DB si chiama ancora 'tipo_lezione_id' e punta a 'tipi_lezioni', 
-        // assicurati che 'tariffe' abbia ID compatibili o che tu abbia aggiornato la FK
-        tipo_lezione_id: formData.tipo_lezione_id, 
+        tipo_lezione_id: tipoLezioneId,
         data_lezione: formData.data_lezione,
         anno_accademico: anno, 
         convalidato: false
       };
 
-      if (formData.id) await supabase.from('registro').update(payload).eq('id', formData.id);
-      else await supabase.from('registro').insert([payload]);
+      if (formData.id) {
+        // UPDATE
+        const { error } = await supabase.from('registro').update(payload).eq('id', formData.id);
+        if (error) throw error;
+      } else {
+        // INSERT
+        const newId = 'R' + Date.now();
+        const { error } = await supabase.from('registro').insert([{ ...payload, id: newId }]);
+        if (error) throw error;
+      }
       
       onSave();
-    } catch(err) { alert("Errore: " + err.message); }
+    } catch(err) { 
+      console.error("Errore salvataggio lezione:", err);
+      alert("Errore: " + err.message); 
+    }
   };
 
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={onClose}></div>
       <div className="relative bg-accademia-card border border-gray-700 w-full max-w-md rounded-xl shadow-2xl p-6">
-        <div className="flex justify-between mb-4"><h3 className="text-lg font-bold text-white">{formData.id?'Modifica':'Nuova'} Lezione ({anno})</h3><button onClick={onClose}><X className="text-gray-400 hover:text-white"/></button></div>
+        <div className="flex justify-between mb-4">
+          <h3 className="text-lg font-bold text-white">{formData.id?'Modifica':'Nuova'} Lezione ({anno})</h3>
+          <button onClick={onClose}><X className="text-gray-400 hover:text-white"/></button>
+        </div>
         <form onSubmit={handleSubmit} className="space-y-4">
           {user.ruolo !== 'Docente' && (
-            <div><label className="block text-xs text-gray-400 uppercase">Docente</label><select value={formData.docente_id} onChange={e=>setFormData({...formData,docente_id:e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white" required><option value="">Seleziona...</option>{docenti.map(d=><option key={d.id} value={d.id}>{d.nome}</option>)}</select></div>
-          )}
-          <div><label className="block text-xs text-gray-400 uppercase">Alunno</label><select value={formData.alunno_id} onChange={e=>setFormData({...formData,alunno_id:e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white" required><option value="">Seleziona...</option>{alunni.map(a=><option key={a.id} value={a.id}>{a.nome}</option>)}</select></div>
-          
-          {/* Selezione Tariffa */}
-          <div>
-            <label className="block text-xs text-gray-400 uppercase">Tipo Lezione (Tariffa {anno})</label>
-            <select value={formData.tipo_lezione_id} onChange={e=>setFormData({...formData,tipo_lezione_id:e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white" required>
+            <div>
+              <label className="block text-xs text-gray-400 uppercase mb-1">Docente</label>
+              <select 
+                value={formData.docente_id} 
+                onChange={e=>setFormData({...formData,docente_id:e.target.value})} 
+                className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" 
+                required
+              >
                 <option value="">Seleziona...</option>
-                {tariffe.map(t=><option key={t.id} value={t.id}>{t.tipo_lezione} (€ {t.costo})</option>)}
+                {docenti.map(d=><option key={d.id} value={d.id}>{d.nome}</option>)}
+              </select>
+            </div>
+          )}
+          
+          <div>
+            <label className="block text-xs text-gray-400 uppercase mb-1">Alunno</label>
+            <select 
+              value={formData.alunno_id} 
+              onChange={e=>setFormData({...formData,alunno_id:e.target.value})} 
+              className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" 
+              required
+            >
+              <option value="">Seleziona...</option>
+              {alunni.map(a=><option key={a.id} value={a.id}>{a.nome}</option>)}
             </select>
-            {tariffe.length === 0 && <p className="text-xs text-red-400 mt-1">Nessuna tariffa trovata per l'anno {anno}</p>}
+          </div>
+          
+          <div>
+            <label className="block text-xs text-gray-400 uppercase mb-1">
+              Tipo Lezione {!formData.id && `(Tariffa ${anno})`}
+            </label>
+            {!formData.id ? (
+              // NUOVO INSERIMENTO: mostra tariffe
+              <>
+                <select 
+                  value={formData.tipo_lezione_id} 
+                  onChange={e=>setFormData({...formData,tipo_lezione_id:e.target.value})} 
+                  className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" 
+                  required
+                >
+                  <option value="">Seleziona...</option>
+                  {tariffe.map(t=>(
+                    <option key={t.id} value={t.id}>
+                      {t.tipo_lezione} (€ {t.costo})
+                    </option>
+                  ))}
+                </select>
+                {tariffe.length === 0 && (
+                  <p className="text-xs text-red-400 mt-1">Nessuna tariffa trovata per l'anno {anno}</p>
+                )}
+              </>
+            ) : (
+              // MODIFICA: mostra tipo corrente (readonly)
+              <div className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-gray-400 cursor-not-allowed">
+                {lezione?.tipi_lezioni?.tipo || 'N/A'} (€ {lezione?.tipi_lezioni?.costo || 0})
+              </div>
+            )}
           </div>
 
-          <div><label className="block text-xs text-gray-400 uppercase">Data</label><input type="date" value={formData.data_lezione} onChange={e=>setFormData({...formData,data_lezione:e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white" required/></div>
-          <div className="flex justify-end pt-4"><button type="submit" className="bg-accademia-red hover:bg-red-700 text-white px-6 py-2 rounded-lg font-bold">Salva</button></div>
+          <div>
+            <label className="block text-xs text-gray-400 uppercase mb-1">Data</label>
+            <input 
+              type="date" 
+              value={formData.data_lezione} 
+              onChange={e=>setFormData({...formData,data_lezione:e.target.value})} 
+              className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" 
+              required
+            />
+          </div>
+          
+          <div className="flex justify-end pt-4">
+            <button type="submit" className="bg-accademia-red hover:bg-red-700 text-white px-6 py-2 rounded-lg font-bold transition-colors">
+              Salva
+            </button>
+          </div>
         </form>
       </div>
     </div>, document.body

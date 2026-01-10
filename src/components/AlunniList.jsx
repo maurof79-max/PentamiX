@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { supabase } from '../supabaseClient';
-import { Edit2, Trash2, Plus, X, Check, Save, Users } from 'lucide-react';  // AGGIUNTO Users
+import { Edit2, Trash2, Plus, X, Check, Save, Users } from 'lucide-react';
+import ConfirmDialog from './ConfirmDialog';
 
 export default function AlunniList({ userRole, userEmail }) {
   const [alunni, setAlunni] = useState([]);
@@ -10,12 +11,20 @@ export default function AlunniList({ userRole, userEmail }) {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingAlunno, setEditingAlunno] = useState(null);
+  const [confirmDialog, setConfirmDialog] = useState({ 
+    isOpen: false, 
+    type: 'danger',
+    title: '',
+    message: '',
+    confirmText: 'Conferma',
+    onConfirm: null,
+    showCancel: true
+  });
 
   // Recupera l'ID del docente associato all'utente loggato (se docente)
   useEffect(() => {
     const fetchDocenteId = async () => {
       if (userRole === 'Docente' && userEmail) {
-        // Cerca nella tabella utenti l'id_collegato usando l'email
         const { data } = await supabase
           .from('utenti')
           .select('id_collegato')
@@ -37,7 +46,6 @@ export default function AlunniList({ userRole, userEmail }) {
     let alunniData;
     
     if (userRole === 'Docente' && docenteId) {
-      // DOCENTE: Mostra solo alunni associati
       const { data: assocData } = await supabase
         .from('associazioni')
         .select('alunno_id, alunni(*)')
@@ -45,7 +53,6 @@ export default function AlunniList({ userRole, userEmail }) {
       
       alunniData = assocData?.map(a => a.alunni).filter(Boolean) || [];
     } else {
-      // GESTORE & ADMIN: Mostra tutti gli alunni
       const { data } = await supabase
         .from('alunni')
         .select('*')
@@ -54,12 +61,10 @@ export default function AlunniList({ userRole, userEmail }) {
       alunniData = data || [];
     }
     
-    // Fetch Associazioni per mostrare i docenti nella tabella
     const { data: assocData } = await supabase
       .from('associazioni')
       .select('alunno_id, docenti(nome)');
     
-    // Mappa
     const mapDocenti = {};
     assocData?.forEach(a => {
       if (!mapDocenti[a.alunno_id]) mapDocenti[a.alunno_id] = [];
@@ -86,7 +91,7 @@ export default function AlunniList({ userRole, userEmail }) {
   };
 
   useEffect(() => {
-    if (userRole === 'Docente' && !docenteId) return; // Aspetta il docenteId
+    if (userRole === 'Docente' && !docenteId) return;
     fetchAlunni();
     fetchDocenti();
   }, [userRole, docenteId]);
@@ -96,11 +101,95 @@ export default function AlunniList({ userRole, userEmail }) {
     setShowModal(true);
   };
 
-  const handleDelete = async (id) => {
-    if (!confirm("Eliminare alunno?")) return;
-    const { error } = await supabase.from('alunni').delete().eq('id', id);
-    if (error) alert(error.message);
-    else fetchAlunni();
+  const handleDeleteClick = async (alunno) => {
+    // Verifica se ci sono lezioni associate
+    const { data: lezioni, error } = await supabase
+      .from('registro')
+      .select('id')
+      .eq('alunno_id', alunno.id)
+      .limit(1);
+
+    if (error) {
+      console.error("Errore verifica lezioni:", error);
+      setConfirmDialog({
+        isOpen: true,
+        type: 'danger',
+        title: 'Errore',
+        message: 'Si è verificato un errore durante la verifica. Riprova.',
+        confirmText: 'OK',
+        showCancel: false,
+        onConfirm: () => setConfirmDialog(prev => ({ ...prev, isOpen: false }))
+      });
+      return;
+    }
+
+    if (lezioni && lezioni.length > 0) {
+      // Ci sono lezioni: imposta come Non Attivo
+      setConfirmDialog({
+        isOpen: true,
+        type: 'warning',
+        title: 'Impossibile Eliminare',
+        message: `L'alunno "${alunno.nome}" ha lezioni registrate nel sistema.\n\nNon può essere eliminato, ma verrà impostato come "Non Attivo".`,
+        confirmText: 'Imposta Non Attivo',
+        cancelText: 'Annulla',
+        showCancel: true,
+        onConfirm: async () => {
+          const { error: updateError } = await supabase
+            .from('alunni')
+            .update({ stato: 'Non Attivo' })
+            .eq('id', alunno.id);
+
+          if (updateError) {
+            console.error("Errore aggiornamento stato:", updateError);
+            setConfirmDialog({
+              isOpen: true,
+              type: 'danger',
+              title: 'Errore',
+              message: 'Errore durante l\'aggiornamento dello stato.',
+              confirmText: 'OK',
+              showCancel: false,
+              onConfirm: () => setConfirmDialog(prev => ({ ...prev, isOpen: false }))
+            });
+          } else {
+            fetchAlunni();
+            setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+          }
+        }
+      });
+    } else {
+      // Nessuna lezione: elimina
+      setConfirmDialog({
+        isOpen: true,
+        type: 'danger',
+        title: 'Elimina Alunno',
+        message: `Sei sicuro di voler eliminare l'alunno "${alunno.nome}"?\n\nQuesta azione non può essere annullata.`,
+        confirmText: 'Elimina',
+        cancelText: 'Annulla',
+        showCancel: true,
+        onConfirm: async () => {
+          const { error: deleteError } = await supabase
+            .from('alunni')
+            .delete()
+            .eq('id', alunno.id);
+
+          if (deleteError) {
+            console.error("Errore eliminazione:", deleteError);
+            setConfirmDialog({
+              isOpen: true,
+              type: 'danger',
+              title: 'Errore',
+              message: 'Errore durante l\'eliminazione: ' + deleteError.message,
+              confirmText: 'OK',
+              showCancel: false,
+              onConfirm: () => setConfirmDialog(prev => ({ ...prev, isOpen: false }))
+            });
+          } else {
+            fetchAlunni();
+            setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+          }
+        }
+      });
+    }
   };
 
   if (loading) {
@@ -111,10 +200,8 @@ export default function AlunniList({ userRole, userEmail }) {
     );
   }
 
-  // --- RENDER ---
   return (
     <div className="h-full flex flex-col relative">
-      {/* Toolbar - Fissa in alto */}
       <div className="p-4 border-b border-gray-800 flex justify-between items-center shrink-0 bg-gray-900/20">
         <div className="text-sm text-gray-400">
           {userRole === 'Docente' && (
@@ -132,7 +219,6 @@ export default function AlunniList({ userRole, userEmail }) {
         </button>
       </div>
 
-      {/* Table Container Scrollabile */}
       <div className="flex-1 overflow-auto custom-scrollbar">
         {alunni.length === 0 ? (
           <div className="flex items-center justify-center h-full text-gray-500">
@@ -187,7 +273,7 @@ export default function AlunniList({ userRole, userEmail }) {
                         <Edit2 size={16}/>
                       </button>
                       <button 
-                        onClick={() => handleDelete(al.id)} 
+                        onClick={() => handleDeleteClick(al)} 
                         className="p-1.5 hover:bg-gray-700 rounded-md text-red-400 transition-colors"
                         title="Elimina"
                       >
@@ -212,11 +298,23 @@ export default function AlunniList({ userRole, userEmail }) {
           onSave={() => { setShowModal(false); fetchAlunni(); }}
         />
       )}
+
+      <ConfirmDialog
+        isOpen={confirmDialog.isOpen}
+        type={confirmDialog.type}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmText={confirmDialog.confirmText}
+        cancelText={confirmDialog.cancelText}
+        showCancel={confirmDialog.showCancel}
+        onConfirm={confirmDialog.onConfirm}
+        onCancel={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
+      />
     </div>
   );
 }
 
-// --- COMPONENTE MODALE DEFINITO ESTERNAMENTE ---
+// COMPONENTE MODALE - IDENTICO A PRIMA
 function ModalAlunno({ alunno, docenti, userRole, docenteId, onClose, onSave }) {
   const [formData, setFormData] = useState({
     id: alunno?.id || null,
@@ -225,13 +323,12 @@ function ModalAlunno({ alunno, docenti, userRole, docenteId, onClose, onSave }) 
     cellulare: alunno?.cellulare || '',
     stato: alunno?.stato || 'Attivo',
     note: alunno?.note || '',
-    selectedDocenti: [] // ID dei docenti selezionati
+    selectedDocenti: []
   });
 
-  const [existingDocenti, setExistingDocenti] = useState([]); // Docenti già associati (solo visualizzazione per docente)
+  const [existingDocenti, setExistingDocenti] = useState([]);
   const [loadingAssociations, setLoadingAssociations] = useState(false);
 
-  // Carica associazioni esistenti all'apertura se in modifica
   useEffect(() => {
     if (alunno?.id) {
       const loadAssoc = async () => {
@@ -256,7 +353,6 @@ function ModalAlunno({ alunno, docenti, userRole, docenteId, onClose, onSave }) 
               selectedDocenti: docentiIds
             }));
             
-            // Per docenti in modifica, salva i nomi per visualizzazione
             if (userRole === 'Docente') {
               setExistingDocenti(docentiNomi);
             }
@@ -269,7 +365,6 @@ function ModalAlunno({ alunno, docenti, userRole, docenteId, onClose, onSave }) 
       };
       loadAssoc();
     } else if (userRole === 'Docente' && docenteId) {
-      // Nuovo alunno per docente: preseleziona automaticamente il docente
       setFormData(prev => ({
         ...prev,
         selectedDocenti: [docenteId]
@@ -301,22 +396,17 @@ function ModalAlunno({ alunno, docenti, userRole, docenteId, onClose, onSave }) 
       let newId = formData.id;
 
       if (newId) {
-        // UPDATE
         const { error } = await supabase.from('alunni').update(payload).eq('id', newId);
         if (error) throw error;
       } else {
-        // INSERT
         newId = 'A' + Date.now();
         const { error } = await supabase.from('alunni').insert([{ ...payload, id: newId }]);
         if (error) throw error;
       }
 
-      // Aggiorna associazioni SOLO se NON è un docente
       if (newId && userRole !== 'Docente') {
-        // Rimuovi vecchie associazioni
         await supabase.from('associazioni').delete().eq('alunno_id', newId);
         
-        // Inserisci nuove associazioni
         if (formData.selectedDocenti.length > 0) {
           const assocPayload = formData.selectedDocenti.map(did => ({
             alunno_id: newId,
@@ -326,14 +416,12 @@ function ModalAlunno({ alunno, docenti, userRole, docenteId, onClose, onSave }) 
           if (error) throw error;
         }
       } else if (newId && userRole === 'Docente' && !formData.id) {
-        // Nuovo alunno creato da docente: associa solo a se stesso
         const { error } = await supabase.from('associazioni').insert([{
           alunno_id: newId,
           docente_id: docenteId
         }]);
         if (error) throw error;
       }
-      // Se è docente in modifica, non toccare le associazioni
       
       onSave();
     } catch(err) {
@@ -342,17 +430,13 @@ function ModalAlunno({ alunno, docenti, userRole, docenteId, onClose, onSave }) 
     }
   };
 
-  // Determina se mostrare la sezione di selezione docenti
-  // Solo Gestore/Admin possono vedere e modificare le associazioni
   const canEditAssociations = userRole !== 'Docente';
 
-  // Renderizza con Portal
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={onClose}></div>
       <div className="relative bg-accademia-card border border-gray-700 w-full max-w-2xl rounded-xl shadow-2xl p-6 flex flex-col max-h-[90vh] overflow-hidden animate-in fade-in zoom-in-95 duration-200">
         
-        {/* Header Modale */}
         <div className="flex justify-between mb-4 pb-4 border-b border-gray-800">
           <h3 className="text-xl font-bold text-white">
             {formData.id ? 'Modifica Alunno' : 'Nuovo Alunno'}
@@ -362,7 +446,6 @@ function ModalAlunno({ alunno, docenti, userRole, docenteId, onClose, onSave }) 
           </button>
         </div>
 
-        {/* Body Modale Scrollabile */}
         <div className="overflow-y-auto pr-2 custom-scrollbar flex-1">
           <form id="formAlunno" onSubmit={handleSubmit} className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -433,14 +516,12 @@ function ModalAlunno({ alunno, docenti, userRole, docenteId, onClose, onSave }) 
               ></textarea>
             </div>
 
-            {/* SEZIONE DOCENTI */}
             <div className="border-t border-gray-800 pt-4">
               <label className="block text-sm font-bold text-accademia-red mb-3 uppercase tracking-wider">
                 {canEditAssociations ? 'Docenti Associati' : 'Associazione Docente'}
               </label>
               
               {canEditAssociations ? (
-                // GESTORE/ADMIN: Selezione multipla completa
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-40 overflow-y-auto custom-scrollbar p-1">
                   {docenti.map(d => {
                     const isSelected = formData.selectedDocenti.includes(d.id);
@@ -478,7 +559,6 @@ function ModalAlunno({ alunno, docenti, userRole, docenteId, onClose, onSave }) 
                   })}
                 </div>
               ) : formData.id ? (
-                // DOCENTE IN MODIFICA: Mostra solo visualizzazione docenti esistenti
                 <div className="p-4 bg-gray-800/30 border border-gray-700 rounded-lg">
                   {loadingAssociations ? (
                     <div className="text-center text-gray-400 py-2">Caricamento...</div>
@@ -513,7 +593,6 @@ function ModalAlunno({ alunno, docenti, userRole, docenteId, onClose, onSave }) 
                   )}
                 </div>
               ) : (
-                // DOCENTE CHE CREA NUOVO ALUNNO: Messaggio automatico
                 <div className="p-4 bg-gradient-to-r from-blue-900/20 to-accademia-red/10 border border-blue-800/50 rounded-lg">
                   <div className="flex items-start gap-3">
                     <div className="w-10 h-10 rounded-full bg-accademia-red/20 border border-accademia-red/50 flex items-center justify-center shrink-0 mt-0.5">

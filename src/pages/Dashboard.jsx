@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense, lazy } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { 
@@ -6,16 +6,19 @@ import {
   UserCog, GraduationCap, ClipboardList, TableProperties, Menu, ChevronLeft
 } from 'lucide-react';
 
-// COMPONENTS
-import DocentiList from '../components/DocentiList';
-import Calendario from '../components/Calendario';
-import RegistroLezioni from '../components/RegistroLezioni';
-import Pagamenti from '../components/Pagamenti';
-import AlunniList from '../components/AlunniList';
-import TipiLezioni from '../components/TipiLezioni';
-import UtentiList from '../components/UtentiList'; 
-import RiepilogoFinanziario from '../components/RiepilogoFinanziario'; 
-import DettaglioPagamenti from '../components/DettaglioPagamenti'; 
+// COMPONENTS (Lazy Loading)
+const DocentiList = lazy(() => import('../components/DocentiList'));
+const Calendario = lazy(() => import('../components/Calendario'));
+const RegistroLezioni = lazy(() => import('../components/RegistroLezioni'));
+const Pagamenti = lazy(() => import('../components/Pagamenti'));
+const AlunniList = lazy(() => import('../components/AlunniList'));
+const TipiLezioni = lazy(() => import('../components/TipiLezioni'));
+const UtentiList = lazy(() => import('../components/UtentiList'));
+const RiepilogoFinanziario = lazy(() => import('../components/RiepilogoFinanziario'));
+const DettaglioPagamenti = lazy(() => import('../components/DettaglioPagamenti'));
+
+// Nota: ConfirmDialog è piccolo e usato spesso, puoi lasciarlo importato staticamente se preferisci, 
+// oppure renderlo lazy se vuoi ottimizzare al massimo. Per ora lascialo statico.
 import ConfirmDialog from '../components/ConfirmDialog';
 
 export default function Dashboard() {
@@ -153,7 +156,16 @@ export default function Dashboard() {
         </header>
         <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6 z-10 custom-scrollbar relative w-full">
             {isSidebarOpen && (<div className="fixed inset-0 bg-black/50 z-20 md:hidden backdrop-blur-sm" onClick={() => setIsSidebarOpen(false)}></div>)}
-            <div className="max-w-[1800px] mx-auto h-full flex flex-col"><div className="flex-1 bg-accademia-card border border-gray-800 rounded-xl shadow-2xl relative overflow-hidden flex flex-col h-full">{renderContent()}</div></div>
+            <div className="max-w-[1800px] mx-auto h-full flex flex-col"><div className="flex-1 bg-accademia-card border border-gray-800 rounded-xl shadow-2xl relative overflow-hidden flex flex-col h-full">
+  <Suspense fallback={
+    <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-4">
+      <div className="w-8 h-8 border-4 border-accademia-red border-t-transparent rounded-full animate-spin"></div>
+      <p className="text-sm font-light animate-pulse">Caricamento sezione...</p>
+    </div>
+  }>
+    {renderContent()}
+  </Suspense>
+</div></div>
         </div>
       </main>
 

@@ -1,19 +1,19 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Usa import.meta.env per Vite
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseKey = import.meta.env.VITE_SUPABASE_KEY;
 
-// DEBUG: Controlla la console del browser per vedere se i valori sono letti
-// Nota: Non stampare la Key intera in produzione per sicurezza, ma per debug locale è ok
-console.log("Supabase Init - URL:", supabaseUrl);
-console.log("Supabase Init - Key Presente?", !!supabaseKey); 
-
+// Controllo di sicurezza: Verifica che le variabili esistano
 if (!supabaseUrl || !supabaseKey) {
-  // Messaggio di errore più esplicito per aiutarti
-  console.error("ERRORE CRITICO: Variabili d'ambiente mancanti.");
-  console.error("Assicurati di avere un file .env con VITE_SUPABASE_URL e VITE_SUPABASE_KEY");
-  throw new Error('Supabase URL or Key missing. Check .env file or Vercel settings.');
+  console.error("ERRORE CRITICO: Variabili d'ambiente Supabase mancanti.");
+  console.error("Verifica il file .env o le impostazioni di Vercel/Netlify.");
+  throw new Error('Supabase URL or Key missing.');
 }
 
+// Inizializzazione del client
 export const supabase = createClient(supabaseUrl, supabaseKey);
+
+// Log limitato solo in ambiente di sviluppo (opzionale, per debug)
+if (import.meta.env.DEV) {
+    console.debug(`Supabase connesso a: ${supabaseUrl}`);
+}

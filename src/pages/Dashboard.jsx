@@ -52,9 +52,36 @@ export default function Dashboard() {
       else setActiveView('docenti');
     }
     
-    if (window.innerWidth < 768) setIsSidebarOpen(false);
   }, [navigate, activeView]);
+// --- GESTIONE RESPONSIVE (Resize Listener con Debounce) ---
+  useEffect(() => {
+    let timeoutId;
+    
+    const handleResize = () => {
+      // Pulisce il timeout precedente se l'utente sta ancora trascinando la finestra
+      clearTimeout(timeoutId);
+      
+      // Imposta un nuovo timeout (Debounce)
+      timeoutId = setTimeout(() => {
+        if (window.innerWidth < 768) {
+          setIsSidebarOpen(false); // Mobile: chiudi
+        } else {
+          setIsSidebarOpen(true);  // Desktop: apri
+        }
+      }, 150);
+    };
 
+    // Controllo iniziale al montaggio del componente
+    if (window.innerWidth < 768) setIsSidebarOpen(false);
+
+    window.addEventListener('resize', handleResize);
+    
+    // Cleanup: rimuovi listener e timeout quando il componente viene smontato
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      clearTimeout(timeoutId);
+    };
+  }, []);
   const handleLogoutClick = () => {
     setShowLogoutConfirm(true);
   };

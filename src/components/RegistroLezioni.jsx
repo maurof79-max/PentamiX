@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { supabase } from '../supabaseClient';
 import { Plus, X, Edit2, Trash2, Search, ArrowUpDown, AlertTriangle } from 'lucide-react';
@@ -201,18 +201,20 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
     setSortConfig({ key, direction });
   };
 
-  const sortedLezioni = [...lezioni].sort((a, b) => {
-    let valA, valB;
-    switch(sortConfig.key) {
-        case 'data_lezione': valA = new Date(a.data_lezione); valB = new Date(b.data_lezione); break;
-        case 'docente': valA = a.docenti?.nome?.toLowerCase()||''; valB = b.docenti?.nome?.toLowerCase()||''; break;
-        case 'alunno': valA = a.alunni?.nome?.toLowerCase()||''; valB = b.alunni?.nome?.toLowerCase()||''; break;
-        case 'tipo': valA = (a.tipi_lezioni?.tipo || a.tariffe?.tipo_lezione || '').toLowerCase(); 
-                     valB = (b.tipi_lezioni?.tipo || b.tariffe?.tipo_lezione || '').toLowerCase(); break;
-        default: return 0;
-    }
-    return (valA < valB ? -1 : 1) * (sortConfig.direction === 'asc' ? 1 : -1);
-  });
+  const sortedLezioni = useMemo(() => {
+    return [...lezioni].sort((a, b) => {
+      let valA, valB;
+      switch(sortConfig.key) {
+          case 'data_lezione': valA = new Date(a.data_lezione); valB = new Date(b.data_lezione); break;
+          case 'docente': valA = a.docenti?.nome?.toLowerCase()||''; valB = b.docenti?.nome?.toLowerCase()||''; break;
+          case 'alunno': valA = a.alunni?.nome?.toLowerCase()||''; valB = b.alunni?.nome?.toLowerCase()||''; break;
+          case 'tipo': valA = (a.tipi_lezioni?.tipo || a.tariffe?.tipo_lezione || '').toLowerCase(); 
+                       valB = (b.tipi_lezioni?.tipo || b.tariffe?.tipo_lezione || '').toLowerCase(); break;
+          default: return 0;
+      }
+      return (valA < valB ? -1 : 1) * (sortConfig.direction === 'asc' ? 1 : -1);
+    });
+  }, [lezioni, sortConfig]); // Dipendenze: ricalcola solo se cambiano i dati o la configurazione
 
   const handleDeleteClick = async (row) => {
     const hasPermission = await checkPermission(row.anno_accademico);

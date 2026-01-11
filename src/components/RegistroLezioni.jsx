@@ -4,21 +4,11 @@ import { supabase } from '../supabaseClient';
 import { Plus, X, Edit2, Trash2, Search, ArrowUpDown, AlertTriangle } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
 
-const MESI = [
-  { val: 9, label: 'Settembre' }, { val: 10, label: 'Ottobre' }, { val: 11, label: 'Novembre' }, 
-  { val: 12, label: 'Dicembre' }, { val: 1, label: 'Gennaio' }, { val: 2, label: 'Febbraio' }, 
-  { val: 3, label: 'Marzo' }, { val: 4, label: 'Aprile' }, { val: 5, label: 'Maggio' }, 
-  { val: 6, label: 'Giugno' }, { val: 7, label: 'Luglio' }
-];
-
-// Helper per anno corrente
-const getCurrentAcademicYear = () => {
-    const today = new Date();
-    const month = today.getMonth() + 1; 
-    const year = today.getFullYear();
-    if (month >= 9) return `${year}/${year + 1}`;
-    return `${year - 1}/${year}`;
-};
+// --- IMPORT CENTRALIZZATO ---
+import { 
+  MESI_STANDARD as MESI, // Nel registro usiamo solo i mesi reali
+  getCurrentAcademicYear 
+} from '../utils/constants';
 
 export default function RegistroLezioni({ user, currentGlobalYear }) {
   const [lezioni, setLezioni] = useState([]);

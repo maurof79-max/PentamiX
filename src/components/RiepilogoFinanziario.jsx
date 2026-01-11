@@ -2,32 +2,12 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { ClipboardList, Filter } from 'lucide-react';
 
-const MESI = [
-  { val: 0, label: 'ISCR' },
-  { val: 9, label: 'SET' }, { val: 10, label: 'OTT' }, { val: 11, label: 'NOV' }, 
-  { val: 12, label: 'DIC' }, { val: 1, label: 'GEN' }, { val: 2, label: 'FEB' }, 
-  { val: 3, label: 'MAR' }, { val: 4, label: 'APR' }, { val: 5, label: 'MAG' }, 
-  { val: 6, label: 'GIU' }, { val: 7, label: 'LUG' }
-];
-
-// Genera una lista di anni accademici (puoi estenderla se serve)
-const ANNI_ACCADEMICI = [
-    '2023/2024',
-    '2024/2025',
-    '2025/2026',
-    '2026/2027'
-];
-
-// Calcola l'anno accademico corrente basato sulla data odierna
-const getCurrentAcademicYear = () => {
-    const today = new Date();
-    const month = today.getMonth() + 1; // 1-12
-    const year = today.getFullYear();
-    // Se siamo da Gennaio (1) a Agosto (8), l'anno accademico è iniziata l'anno prima (es. Feb 2026 -> 2025/2026)
-    // Se siamo da Settembre (9) a Dicembre (12), l'anno accademico inizia ora (es. Ott 2025 -> 2025/2026)
-    if (month >= 9) return `${year}/${year + 1}`;
-    return `${year - 1}/${year}`;
-};
+// --- IMPORT CENTRALIZZATO ---
+import { 
+  MESI_COMPLETE as MESI, // Include ISCR
+  ANNI_ACCADEMICI_LIST as ANNI_ACCADEMICI,
+  getCurrentAcademicYear 
+} from '../utils/constants';
 
 export default function RiepilogoFinanziario() {
   const [reportData, setReportData] = useState([]);

@@ -5,39 +5,12 @@ import { Plus, X, Edit2, Trash2, Euro, Printer, Save, ChevronUp, ChevronDown, Fi
 // Assicurati che il percorso sia corretto
 import { generateReceiptPDF } from '../utils/pdfGenerator';
 
-const MESI = [
-  { val: 0, label: 'ISCR' },
-  { val: 9, label: 'Settembre' }, { val: 10, label: 'Ottobre' }, { val: 11, label: 'Novembre' }, 
-  { val: 12, label: 'Dicembre' }, { val: 1, label: 'Gennaio' }, { val: 2, label: 'Febbraio' }, 
-  { val: 3, label: 'Marzo' }, { val: 4, label: 'Aprile' }, { val: 5, label: 'Maggio' }, 
-  { val: 6, label: 'Giugno' }, { val: 7, label: 'Luglio' }
-];
-
-const ANNI_ACCADEMICI = [
-    '2023/2024',
-    '2024/2025',
-    '2025/2026',
-    '2026/2027'
-];
-
-// Calcola l'anno accademico corrente (es. oggi è Ott 2025 -> 2025/2026)
-const getCurrentAcademicYear = () => {
-    const today = new Date();
-    const month = today.getMonth() + 1; 
-    const year = today.getFullYear();
-    if (month >= 9) return `${year}/${year + 1}`;
-    return `${year - 1}/${year}`;
-};
-
-// Calcola l'anno accademico basato su una data specifica
-const getAcademicYearFromDate = (dateString) => {
-    if (!dateString) return getCurrentAcademicYear();
-    const d = new Date(dateString);
-    const month = d.getMonth() + 1;
-    const year = d.getFullYear();
-    if (month >= 9) return `${year}/${year + 1}`;
-    return `${year - 1}/${year}`;
-};
+import { 
+  MESI_COMPLETE as MESI, // Rinominiamo per non rompere il codice esistente
+  ANNI_ACCADEMICI_LIST as ANNI_ACCADEMICI, 
+  getCurrentAcademicYear, 
+  getAcademicYearFromDate 
+} from '../utils/constants';
 
 export default function Pagamenti() {
   const [pagamenti, setPagamenti] = useState([]);

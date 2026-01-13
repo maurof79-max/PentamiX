@@ -1,12 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { supabase } from '../supabaseClient';
-import { Edit2, Trash2, Eye, Plus, X, Check } from 'lucide-react';
+import { Edit2, Trash2, Eye, Plus, X, Check, Search, Filter, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
 
 export default function DocentiList({ userRole }) {
   const [docenti, setDocenti] = useState([]);
   const [loading, setLoading] = useState(true);
+  
+  // --- NUOVI STATI FILTRI ---
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterStato, setFilterStato] = useState('Attivo'); 
+  const [sortConfig, setSortConfig] = useState({ key: 'nome', direction: 'asc' });
+
   const [showModal, setShowModal] = useState(false);
   const [editingDocente, setEditingDocente] = useState(null);
   const [confirmDialog, setConfirmDialog] = useState({ 
@@ -36,6 +42,56 @@ export default function DocentiList({ userRole }) {
     fetchDocenti();
   }, []);
 
+  // --- LOGICA FILTRO E ORDINAMENTO (NUOVA) ---
+  const filteredDocenti = useMemo(() => {
+    let result = [...docenti];
+
+    // 1. Filtro Nome e Strumento
+    if (searchTerm) {
+      const lower = searchTerm.toLowerCase();
+      result = result.filter(d => 
+        (d.nome && d.nome.toLowerCase().includes(lower)) ||
+        (d.email && d.email.toLowerCase().includes(lower)) ||
+        (d.strumento && d.strumento.toLowerCase().includes(lower))
+      );
+    }
+
+    // 2. Filtro Stato
+    if (filterStato) {
+      result = result.filter(d => d.stato === filterStato);
+    }
+    
+    // 3. Ordinamento
+    if (sortConfig.key) {
+        result.sort((a, b) => {
+          let valA = a[sortConfig.key] || '';
+          let valB = b[sortConfig.key] || '';
+          
+          if (typeof valA === 'string') valA = valA.toLowerCase();
+          if (typeof valB === 'string') valB = valB.toLowerCase();
+  
+          if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
+          if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
+          return 0;
+        });
+      }
+
+    return result;
+  }, [docenti, searchTerm, filterStato, sortConfig]);
+
+  const handleSort = (key) => {
+      let direction = 'asc';
+      if (sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
+      setSortConfig({ key, direction });
+  };
+  
+  const getSortIcon = (columnKey) => {
+    if (sortConfig.key !== columnKey) return <ArrowUpDown size={14} className="ml-1 opacity-30" />;
+    return sortConfig.direction === 'asc' 
+        ? <ArrowUp size={14} className="ml-1 text-accademia-red" /> 
+        : <ArrowDown size={14} className="ml-1 text-accademia-red" />;
+  };
+
   // --- HANDLERS ---
   const handleOpenModal = (docente = null) => {
     setEditingDocente(docente);
@@ -52,15 +108,6 @@ export default function DocentiList({ userRole }) {
 
     if (error) {
       console.error("Errore verifica lezioni:", error);
-      setConfirmDialog({
-        isOpen: true,
-        type: 'danger',
-        title: 'Errore',
-        message: 'Si è verificato un errore durante la verifica. Riprova.',
-        confirmText: 'OK',
-        showCancel: false,
-        onConfirm: () => setConfirmDialog(prev => ({ ...prev, isOpen: false }))
-      });
       return;
     }
 
@@ -81,16 +128,7 @@ export default function DocentiList({ userRole }) {
             .eq('id', docente.id);
 
           if (updateError) {
-            console.error("Errore aggiornamento stato:", updateError);
-            setConfirmDialog({
-              isOpen: true,
-              type: 'danger',
-              title: 'Errore',
-              message: 'Errore durante l\'aggiornamento dello stato.',
-              confirmText: 'OK',
-              showCancel: false,
-              onConfirm: () => setConfirmDialog(prev => ({ ...prev, isOpen: false }))
-            });
+             alert('Errore durante l\'aggiornamento dello stato.');
           } else {
             fetchDocenti();
             setConfirmDialog(prev => ({ ...prev, isOpen: false }));
@@ -114,16 +152,7 @@ export default function DocentiList({ userRole }) {
             .eq('id', docente.id);
 
           if (deleteError) {
-            console.error("Errore eliminazione:", deleteError);
-            setConfirmDialog({
-              isOpen: true,
-              type: 'danger',
-              title: 'Errore',
-              message: 'Errore durante l\'eliminazione: ' + deleteError.message,
-              confirmText: 'OK',
-              showCancel: false,
-              onConfirm: () => setConfirmDialog(prev => ({ ...prev, isOpen: false }))
-            });
+             alert('Errore durante l\'eliminazione: ' + deleteError.message);
           } else {
             fetchDocenti();
             setConfirmDialog(prev => ({ ...prev, isOpen: false }));
@@ -137,34 +166,76 @@ export default function DocentiList({ userRole }) {
   if (loading) return <div className="p-8 text-center text-gray-400">Caricamento anagrafica...</div>;
 
   return (
-    <div className="h-full flex flex-col relative">
-      {/* Toolbar - Fissa in alto */}
-      {userRole === 'Admin' && (
-        <div className="p-4 border-b border-gray-800 flex justify-end shrink-0 bg-gray-900/20">
-          <button 
-            onClick={() => handleOpenModal(null)}
-            className="flex items-center gap-2 bg-accademia-red hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm transition-colors shadow-sm"
-          >
-            <Plus size={16} />
-            Nuovo Docente
-          </button>
-        </div>
-      )}
+    <div className="h-full flex flex-col relative bg-accademia-card border border-gray-800 rounded-xl overflow-hidden shadow-xl">
+      
+      {/* HEADER & TOOLBAR (NUOVI FILTRI) */}
+      <div className="p-4 border-b border-gray-800 bg-gray-900/20 space-y-4 shrink-0">
+         <div className="flex justify-between items-center">
+             <div className="text-sm text-gray-400 flex items-center gap-2">
+                 <span className="font-bold text-white text-lg">Anagrafica Docenti</span>
+                 <span className="bg-gray-800 text-xs px-2 py-0.5 rounded-full border border-gray-700">{filteredDocenti.length}</span>
+             </div>
+             {userRole === 'Admin' && (
+                <button 
+                  onClick={() => handleOpenModal(null)}
+                  className="flex items-center gap-2 bg-accademia-red hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm transition-colors shadow-sm"
+                >
+                  <Plus size={16} />
+                  Nuovo Docente
+                </button>
+             )}
+         </div>
+
+         {/* FILTRI */}
+         <div className="flex flex-col sm:flex-row gap-3">
+             {/* 1. Cerca */}
+             <div className="relative flex-1">
+                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"/>
+                <input 
+                    type="text" 
+                    placeholder="Cerca per nome, strumento, email..." 
+                    value={searchTerm}
+                    onChange={(e)=>setSearchTerm(e.target.value)}
+                    className="w-full bg-accademia-input border border-gray-700 text-white rounded-md pl-10 pr-4 py-2 text-sm focus:border-accademia-red focus:outline-none placeholder-gray-600"
+                />
+             </div>
+             
+             {/* 2. Filtro Stato */}
+             <div className="relative w-full sm:w-48">
+                 <Filter size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"/>
+                 <select 
+                    value={filterStato}
+                    onChange={(e)=>setFilterStato(e.target.value)}
+                    className="w-full bg-accademia-input border border-gray-700 text-white rounded-md pl-10 pr-8 py-2 text-sm appearance-none focus:border-accademia-red focus:outline-none cursor-pointer"
+                 >
+                    <option value="">Tutti gli Stati</option>
+                    <option value="Attivo">Attivo</option>
+                    <option value="Non Attivo">Non Attivo</option>
+                 </select>
+             </div>
+         </div>
+      </div>
 
       {/* Tabella Scrollabile */}
       <div className="flex-1 overflow-auto custom-scrollbar">
         <table className="w-full text-left text-sm">
           <thead className="bg-gray-900/80 text-gray-400 uppercase text-xs sticky top-0 z-10 backdrop-blur-md">
             <tr>
-              <th className="px-6 py-4 font-semibold shadow-sm">Nome</th>
-              <th className="px-6 py-4 font-semibold shadow-sm">Strumento</th>
+              <th className="px-6 py-4 font-semibold shadow-sm cursor-pointer hover:text-white group" onClick={() => handleSort('nome')}>
+                  <div className="flex items-center">Nome {getSortIcon('nome')}</div>
+              </th>
+              <th className="px-6 py-4 font-semibold shadow-sm cursor-pointer hover:text-white group" onClick={() => handleSort('strumento')}>
+                  <div className="flex items-center">Strumento {getSortIcon('strumento')}</div>
+              </th>
               <th className="px-6 py-4 font-semibold shadow-sm">Contatti</th>
-              <th className="px-6 py-4 font-semibold text-center shadow-sm">Stato</th>
+              <th className="px-6 py-4 font-semibold text-center shadow-sm cursor-pointer hover:text-white group" onClick={() => handleSort('stato')}>
+                  <div className="flex items-center justify-center">Stato {getSortIcon('stato')}</div>
+              </th>
               <th className="px-6 py-4 font-semibold text-right shadow-sm">Azioni</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800">
-            {docenti.map((doc) => (
+            {filteredDocenti.map((doc) => (
               <tr key={doc.id} className="hover:bg-gray-800/30 transition-colors group">
                 <td className="px-6 py-4 font-medium text-white">{doc.nome}</td>
                 <td className="px-6 py-4 text-gray-300">{doc.strumento}</td>
@@ -219,7 +290,7 @@ export default function DocentiList({ userRole }) {
         </table>
       </div>
 
-      {/* MODALE DOCENTE */}
+      {/* MODALE DOCENTE (Completa di tutte le logiche e checkbox) */}
       {showModal && (
         <ModalDocente 
           docente={editingDocente} 
@@ -244,7 +315,7 @@ export default function DocentiList({ userRole }) {
   );
 }
 
-// --- COMPONENTE MODALE INTERNO ---
+// --- COMPONENTE MODALE INTERNO (Completo) ---
 function ModalDocente({ docente, onClose, onSave, readOnly }) {
   const [formData, setFormData] = useState({
     id: docente?.id || '',
@@ -382,7 +453,7 @@ function ModalDocente({ docente, onClose, onSave, readOnly }) {
   return createPortal(modalContent, document.body);
 }
 
-// Helpers UI
+// Helpers UI (Reintegrati)
 const InputGroup = ({ label, name, type = "text", value, onChange, readOnly, required, placeholder }) => (
   <div className="space-y-1.5">
     <label className="text-xs text-gray-400 uppercase font-bold tracking-wider ml-1">{label}</label>

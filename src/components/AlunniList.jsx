@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { supabase } from '../supabaseClient';
-import { Edit2, Trash2, Plus, X, Check, Save, Users } from 'lucide-react';
+import { Edit2, Trash2, Plus, X, Check, Save, Users, Search, Filter, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
 
 export default function AlunniList({ userRole, userEmail }) {
@@ -9,6 +9,13 @@ export default function AlunniList({ userRole, userEmail }) {
   const [docenti, setDocenti] = useState([]);
   const [docenteId, setDocenteId] = useState(null);
   const [loading, setLoading] = useState(true);
+  
+  // --- NUOVI STATI PER FILTRI E ORDINAMENTO ---
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterDocente, setFilterDocente] = useState('');
+  const [filterStato, setFilterStato] = useState(''); // '' = Tutti
+  const [sortConfig, setSortConfig] = useState({ key: 'nome', direction: 'asc' });
+
   const [showModal, setShowModal] = useState(false);
   const [editingAlunno, setEditingAlunno] = useState(null);
   const [confirmDialog, setConfirmDialog] = useState({ 
@@ -63,17 +70,25 @@ export default function AlunniList({ userRole, userEmail }) {
     
     const { data: assocData } = await supabase
       .from('associazioni')
-      .select('alunno_id, docenti(nome)');
+      .select('alunno_id, docenti(id, nome)');
     
-    const mapDocenti = {};
+    const mapDocentiNomi = {};
+    const mapDocentiIds = {}; // Serve per il filtro
+
     assocData?.forEach(a => {
-      if (!mapDocenti[a.alunno_id]) mapDocenti[a.alunno_id] = [];
-      if (a.docenti) mapDocenti[a.alunno_id].push(a.docenti.nome);
+      if (!mapDocentiNomi[a.alunno_id]) mapDocentiNomi[a.alunno_id] = [];
+      if (!mapDocentiIds[a.alunno_id]) mapDocentiIds[a.alunno_id] = [];
+
+      if (a.docenti) {
+        mapDocentiNomi[a.alunno_id].push(a.docenti.nome);
+        mapDocentiIds[a.alunno_id].push(a.docenti.id);
+      }
     });
 
     const merged = alunniData.map(a => ({
       ...a,
-      docentiNomi: mapDocenti[a.id]?.join(', ') || ''
+      docentiNomi: mapDocentiNomi[a.id]?.join(', ') || '',
+      docentiIds: mapDocentiIds[a.id] || []
     }));
 
     setAlunni(merged);
@@ -96,13 +111,69 @@ export default function AlunniList({ userRole, userEmail }) {
     fetchDocenti();
   }, [userRole, docenteId]);
 
+  // --- LOGICA DI FILTRO E ORDINAMENTO (NUOVA) ---
+  const handleSort = (key) => {
+    let direction = 'asc';
+    if (sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    }
+    setSortConfig({ key, direction });
+  };
+
+  const getSortIcon = (columnKey) => {
+    if (sortConfig.key !== columnKey) return <ArrowUpDown size={14} className="ml-1 opacity-30" />;
+    return sortConfig.direction === 'asc' 
+      ? <ArrowUp size={14} className="ml-1 text-accademia-red" /> 
+      : <ArrowDown size={14} className="ml-1 text-accademia-red" />;
+  };
+
+  const filteredAlunni = useMemo(() => {
+    let result = [...alunni];
+
+    // 1. Filtro Ricerca
+    if (searchTerm) {
+      const lower = searchTerm.toLowerCase();
+      result = result.filter(a => 
+        (a.nome && a.nome.toLowerCase().includes(lower)) ||
+        (a.email && a.email.toLowerCase().includes(lower)) ||
+        (a.cellulare && a.cellulare.includes(lower))
+      );
+    }
+
+    // 2. Filtro Docente (Solo Admin/Gestore)
+    if (userRole !== 'Docente' && filterDocente) {
+      result = result.filter(a => a.docentiIds && a.docentiIds.includes(filterDocente));
+    }
+
+    // 3. Filtro Stato
+    if (filterStato) {
+      result = result.filter(a => a.stato === filterStato);
+    }
+
+    // 4. Ordinamento
+    if (sortConfig.key) {
+      result.sort((a, b) => {
+        let valA = a[sortConfig.key] || '';
+        let valB = b[sortConfig.key] || '';
+        
+        if (typeof valA === 'string') valA = valA.toLowerCase();
+        if (typeof valB === 'string') valB = valB.toLowerCase();
+
+        if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
+        if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+    return result;
+  }, [alunni, searchTerm, filterDocente, filterStato, sortConfig, userRole]);
+
+
   const handleOpenModal = (alunno = null) => {
     setEditingAlunno(alunno);
     setShowModal(true);
   };
 
   const handleDeleteClick = async (alunno) => {
-    // Verifica se ci sono lezioni associate
     const { data: lezioni, error } = await supabase
       .from('registro')
       .select('id')
@@ -111,20 +182,10 @@ export default function AlunniList({ userRole, userEmail }) {
 
     if (error) {
       console.error("Errore verifica lezioni:", error);
-      setConfirmDialog({
-        isOpen: true,
-        type: 'danger',
-        title: 'Errore',
-        message: 'Si è verificato un errore durante la verifica. Riprova.',
-        confirmText: 'OK',
-        showCancel: false,
-        onConfirm: () => setConfirmDialog(prev => ({ ...prev, isOpen: false }))
-      });
       return;
     }
 
     if (lezioni && lezioni.length > 0) {
-      // Ci sono lezioni: imposta come Non Attivo
       setConfirmDialog({
         isOpen: true,
         type: 'warning',
@@ -140,16 +201,7 @@ export default function AlunniList({ userRole, userEmail }) {
             .eq('id', alunno.id);
 
           if (updateError) {
-            console.error("Errore aggiornamento stato:", updateError);
-            setConfirmDialog({
-              isOpen: true,
-              type: 'danger',
-              title: 'Errore',
-              message: 'Errore durante l\'aggiornamento dello stato.',
-              confirmText: 'OK',
-              showCancel: false,
-              onConfirm: () => setConfirmDialog(prev => ({ ...prev, isOpen: false }))
-            });
+            alert('Errore durante l\'aggiornamento dello stato.');
           } else {
             fetchAlunni();
             setConfirmDialog(prev => ({ ...prev, isOpen: false }));
@@ -157,7 +209,6 @@ export default function AlunniList({ userRole, userEmail }) {
         }
       });
     } else {
-      // Nessuna lezione: elimina
       setConfirmDialog({
         isOpen: true,
         type: 'danger',
@@ -173,16 +224,7 @@ export default function AlunniList({ userRole, userEmail }) {
             .eq('id', alunno.id);
 
           if (deleteError) {
-            console.error("Errore eliminazione:", deleteError);
-            setConfirmDialog({
-              isOpen: true,
-              type: 'danger',
-              title: 'Errore',
-              message: 'Errore durante l\'eliminazione: ' + deleteError.message,
-              confirmText: 'OK',
-              showCancel: false,
-              onConfirm: () => setConfirmDialog(prev => ({ ...prev, isOpen: false }))
-            });
+             alert('Errore durante l\'eliminazione: ' + deleteError.message);
           } else {
             fetchAlunni();
             setConfirmDialog(prev => ({ ...prev, isOpen: false }));
@@ -201,44 +243,104 @@ export default function AlunniList({ userRole, userEmail }) {
   }
 
   return (
-    <div className="h-full flex flex-col relative">
-      <div className="p-4 border-b border-gray-800 flex justify-between items-center shrink-0 bg-gray-900/20">
-        <div className="text-sm text-gray-400">
-          {userRole === 'Docente' && (
-            <span className="flex items-center gap-2">
-              <span className="w-2 h-2 bg-accademia-red rounded-full animate-pulse"></span>
-              Visualizzi solo i tuoi alunni
-            </span>
-          )}
+    <div className="h-full flex flex-col relative bg-accademia-card border border-gray-800 rounded-xl overflow-hidden shadow-xl">
+      
+      {/* HEADER & TOOLBAR (NUOVA SEZIONE FILTRI) */}
+      <div className="p-4 border-b border-gray-800 bg-gray-900/20 space-y-4 shrink-0">
+        <div className="flex justify-between items-center">
+            <div className="text-sm text-gray-400">
+            {userRole === 'Docente' ? (
+                <span className="flex items-center gap-2">
+                <span className="w-2 h-2 bg-accademia-red rounded-full animate-pulse"></span>
+                Visualizzi solo i tuoi alunni ({filteredAlunni.length})
+                </span>
+            ) : (
+                <span className="flex items-center gap-2 font-bold text-white text-lg">
+                   <Users size={20} className="text-accademia-red"/> Gestione Alunni 
+                   <span className="bg-gray-800 text-xs px-2 py-0.5 rounded-full border border-gray-700 font-normal ml-2">{filteredAlunni.length}</span>
+                </span>
+            )}
+            </div>
+            <button 
+            onClick={() => handleOpenModal(null)}
+            className="flex items-center gap-2 bg-accademia-red hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm font-medium shadow-sm transition-colors"
+            >
+            <Plus size={16} /> Nuovo Alunno
+            </button>
         </div>
-        <button 
-          onClick={() => handleOpenModal(null)}
-          className="flex items-center gap-2 bg-accademia-red hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm shadow-sm transition-colors"
-        >
-          <Plus size={16} /> Nuovo Alunno
-        </button>
+
+        {/* --- BARRA DEI FILTRI --- */}
+        <div className="flex flex-col sm:flex-row gap-3">
+             {/* 1. Cerca */}
+             <div className="relative flex-1">
+                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"/>
+                <input 
+                    type="text" 
+                    placeholder="Cerca nome, email, telefono..." 
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="w-full bg-accademia-input border border-gray-700 text-white rounded-md pl-10 pr-4 py-2 text-sm focus:border-accademia-red focus:outline-none placeholder-gray-600 transition-colors"
+                />
+             </div>
+
+             {/* 2. Filtro Stato */}
+             <div className="relative w-full sm:w-40">
+                 <Filter size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"/>
+                 <select 
+                    value={filterStato}
+                    onChange={(e) => setFilterStato(e.target.value)}
+                    className="w-full bg-accademia-input border border-gray-700 text-white rounded-md pl-10 pr-8 py-2 text-sm appearance-none focus:border-accademia-red focus:outline-none cursor-pointer"
+                 >
+                    <option value="">Tutti gli Stati</option>
+                    <option value="Attivo">Attivo</option>
+                    <option value="Non Attivo">Non Attivo</option>
+                 </select>
+             </div>
+
+             {/* 3. Filtro Docente (Solo Admin/Gestore) */}
+             {userRole !== 'Docente' && (
+                <div className="relative w-full sm:w-64">
+                    <Users size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"/>
+                    <select
+                        value={filterDocente}
+                        onChange={(e) => setFilterDocente(e.target.value)}
+                        className="w-full bg-accademia-input border border-gray-700 text-white rounded-md pl-10 pr-8 py-2 text-sm appearance-none focus:border-accademia-red focus:outline-none cursor-pointer"
+                    >
+                        <option value="">Tutti i Docenti</option>
+                        {docenti.map(d => (
+                            <option key={d.id} value={d.id}>{d.nome}</option>
+                        ))}
+                    </select>
+                </div>
+             )}
+        </div>
       </div>
 
       <div className="flex-1 overflow-auto custom-scrollbar">
-        {alunni.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-gray-500">
-            Nessun alunno {userRole === 'Docente' ? 'associato' : 'presente'}
+        {filteredAlunni.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-3">
+            <Search size={40} className="opacity-20"/>
+            <p>Nessun alunno trovato con i filtri correnti.</p>
           </div>
         ) : (
           <table className="w-full text-left text-sm">
             <thead className="bg-gray-900/80 text-gray-400 uppercase text-xs sticky top-0 z-10 backdrop-blur-md">
               <tr>
-                <th className="px-6 py-4 font-semibold shadow-sm">Nome</th>
+                <th className="px-6 py-4 font-semibold shadow-sm cursor-pointer hover:text-white group" onClick={() => handleSort('nome')}>
+                   <div className="flex items-center">Nome {getSortIcon('nome')}</div>
+                </th>
                 <th className="px-6 py-4 font-semibold shadow-sm">Contatti</th>
                 {userRole !== 'Docente' && (
                   <th className="px-6 py-4 font-semibold shadow-sm">Docenti Associati</th>
                 )}
-                <th className="px-6 py-4 font-semibold text-center shadow-sm">Stato</th>
+                <th className="px-6 py-4 font-semibold text-center shadow-sm cursor-pointer hover:text-white group" onClick={() => handleSort('stato')}>
+                    <div className="flex items-center justify-center">Stato {getSortIcon('stato')}</div>
+                </th>
                 <th className="px-6 py-4 font-semibold text-right shadow-sm">Azioni</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-800">
-              {alunni.map(al => (
+              {filteredAlunni.map(al => (
                 <tr key={al.id} className="hover:bg-gray-800/30 transition-colors group">
                   <td className="px-6 py-4 font-medium text-white">{al.nome}</td>
                   <td className="px-6 py-4 text-gray-400">
@@ -314,7 +416,7 @@ export default function AlunniList({ userRole, userEmail }) {
   );
 }
 
-// COMPONENTE MODALE - IDENTICO A PRIMA
+// COMPONENTE MODALE (Completo di tutte le logiche e stili originali)
 function ModalAlunno({ alunno, docenti, userRole, docenteId, onClose, onSave }) {
   const [formData, setFormData] = useState({
     id: alunno?.id || null,

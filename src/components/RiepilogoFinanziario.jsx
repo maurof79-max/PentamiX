@@ -31,6 +31,16 @@ export default function RiepilogoFinanziario() {
     init();
   }, [selectedAnno]);
 
+  // Funzione helper per formattare i numeri con il punto delle migliaia (Locale IT)
+  const formatAmount = (amount) => {
+    if (amount === undefined || amount === null) return '0';
+    // Usa 'it-IT' per avere il punto come separatore delle migliaia (es. 1.200,50)
+    return amount.toLocaleString('it-IT', { 
+      minimumFractionDigits: 0, 
+      maximumFractionDigits: 2 
+    });
+  };
+
   const fetchReport = async (quotaValue, annoAccademico) => {
     setLoading(true);
     try {
@@ -63,8 +73,7 @@ export default function RiepilogoFinanziario() {
         .gte('data_lezione', startDate)
         .lte('data_lezione', endDate);
 
-      // 4. Fetch Associazioni (Per conteggio iscritti - Nota: le associazioni sono lo stato "corrente")
-      // Se si volesse lo storico associazioni, servirebbe una tabella storica. Qui usiamo l'attuale.
+      // 4. Fetch Associazioni (Per conteggio iscritti)
       const { data: associazioni } = await supabase
         .from('associazioni')
         .select('docente_id');
@@ -201,18 +210,18 @@ export default function RiepilogoFinanziario() {
             <div className="flex gap-4 text-xs hidden sm:flex">
                 <div className="flex flex-col items-end">
                     <span className="text-gray-500 uppercase font-bold tracking-wider">Dovuto</span>
-                    <span className="text-gray-300 font-mono text-base">€ {totals.dovuto.toLocaleString()}</span>
+                    <span className="text-gray-300 font-mono text-base">€ {formatAmount(totals.dovuto)}</span>
                 </div>
                 <div className="w-px bg-gray-600 h-8 self-center"></div>
                 <div className="flex flex-col items-end">
                     <span className="text-gray-500 uppercase font-bold tracking-wider">Pagato</span>
-                    <span className="text-green-400 font-mono text-base">€ {totals.pagato.toLocaleString()}</span>
+                    <span className="text-green-400 font-mono text-base">€ {formatAmount(totals.pagato)}</span>
                 </div>
                 <div className="w-px bg-gray-600 h-8 self-center"></div>
                 <div className="flex flex-col items-end">
                     <span className="text-gray-500 uppercase font-bold tracking-wider">Diff</span>
                     <span className={`font-mono font-bold text-base ${totals.diff >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                        € {Math.abs(totals.diff).toLocaleString()}
+                        € {formatAmount(Math.abs(totals.diff))}
                     </span>
                 </div>
             </div>
@@ -244,10 +253,10 @@ export default function RiepilogoFinanziario() {
                     return (
                         <td key={m.val} className="p-2 border-r border-gray-600 text-center bg-gray-800/50 border-b border-gray-600">
                             <div className="flex flex-col gap-1 items-center">
-                                <div className="text-sm text-gray-400 font-medium">D: € {mt.dovuto}</div>
-                                <div className="text-sm text-white font-bold">P: € {mt.pagato}</div>
+                                <div className="text-sm text-gray-400 font-medium">D: € {formatAmount(mt.dovuto)}</div>
+                                <div className="text-sm text-white font-bold">P: € {formatAmount(mt.pagato)}</div>
                                 <div className={`text-base font-extrabold border-t border-gray-600 w-full pt-1 mt-1 ${mt.diff >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                                    € {Math.abs(mt.diff)}
+                                    € {formatAmount(Math.abs(mt.diff))}
                                 </div>
                             </div>
                         </td>
@@ -255,7 +264,7 @@ export default function RiepilogoFinanziario() {
                 })}
                 <td className="p-3 border-l border-gray-600 bg-gray-900/50 text-center border-b border-gray-600">
                     <span className={`text-base font-extrabold ${totals.diff >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                       € {Math.abs(totals.diff)}
+                       € {formatAmount(Math.abs(totals.diff))}
                     </span>
                 </td>
             </tr>
@@ -276,13 +285,13 @@ export default function RiepilogoFinanziario() {
                       {hasData ? (
                         <div className="flex flex-col items-center justify-center h-full gap-1">
                            <div className="text-sm text-gray-500 font-medium">
-                                D: <span className="text-gray-300 font-mono text-sm">€ {data.dovuto}</span>
+                                D: <span className="text-gray-300 font-mono text-sm">€ {formatAmount(data.dovuto)}</span>
                            </div>
                            <div className="text-sm text-white font-bold">
-                                P: <span className="text-white font-mono text-sm">€ {data.pagato}</span>
+                                P: <span className="text-white font-mono text-sm">€ {formatAmount(data.pagato)}</span>
                            </div>
                            <div className={`w-full text-center border-t border-gray-700 pt-1 font-bold text-sm ${data.diff >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                             € {Math.abs(data.diff)}
+                             € {formatAmount(Math.abs(data.diff))}
                            </div>
                         </div>
                       ) : (
@@ -294,10 +303,10 @@ export default function RiepilogoFinanziario() {
 
                 <td className="p-3 bg-gray-900/40 border-l border-gray-700 font-mono align-middle text-center border-b border-gray-700">
                   <div className="flex flex-col gap-1 items-center">
-                    <div className="text-sm text-gray-400 font-medium">D: € {doc.totale.dovuto}</div>
-                    <div className="text-sm text-white font-bold">P: € {doc.totale.pagato}</div>
+                    <div className="text-sm text-gray-400 font-medium">D: € {formatAmount(doc.totale.dovuto)}</div>
+                    <div className="text-sm text-white font-bold">P: € {formatAmount(doc.totale.pagato)}</div>
                     <div className={`text-base font-extrabold border-t border-gray-600 w-full pt-1 mt-1 ${doc.totale.diff >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                      € {Math.abs(doc.totale.diff)}
+                      € {formatAmount(Math.abs(doc.totale.diff))}
                     </div>
                   </div>
                 </td>

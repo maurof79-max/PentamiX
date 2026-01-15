@@ -5,6 +5,7 @@ import {
   LogOut, Calendar, Users, DollarSign, BookOpen, Settings, 
   UserCog, GraduationCap, ClipboardList, TableProperties, Menu, ChevronLeft
 } from 'lucide-react';
+import ConfirmDialog from '../components/ConfirmDialog';
 
 // COMPONENTS (Lazy Loading)
 const DocentiList = lazy(() => import('../components/DocentiList'));
@@ -16,16 +17,15 @@ const TipiLezioni = lazy(() => import('../components/TipiLezioni'));
 const UtentiList = lazy(() => import('../components/UtentiList'));
 const RiepilogoFinanziario = lazy(() => import('../components/RiepilogoFinanziario'));
 const DettaglioPagamenti = lazy(() => import('../components/DettaglioPagamenti'));
-
-// Nota: ConfirmDialog è piccolo e usato spesso, puoi lasciarlo importato staticamente se preferisci, 
-// oppure renderlo lazy se vuoi ottimizzare al massimo. Per ora lascialo statico.
-import ConfirmDialog from '../components/ConfirmDialog';
+// Nuovo componente per le configurazioni
+const ConfigurazioniApp = lazy(() => import('../components/ConfigurazioniApp'));
 
 export default function Dashboard() {
   const [user, setUser] = useState(null);
   const [activeView, setActiveView] = useState(''); 
   const [isSidebarOpen, setIsSidebarOpen] = useState(true); 
   const [currentAcademicYear, setCurrentAcademicYear] = useState('2025/2026');
+  const [appConfig, setAppConfig] = useState({}); // Stato per le configurazioni globali
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const navigate = useNavigate();
 
@@ -38,10 +38,21 @@ export default function Dashboard() {
     const parsedUser = JSON.parse(storedUser);
     setUser(parsedUser);
 
-    // Fetch Global Config (Anno Corrente)
+    // Fetch Global Config (Anno Corrente + Parametri App)
     const fetchConfig = async () => {
-        const { data } = await supabase.from('anni_accademici').select('anno').eq('is_current', true).single();
-        if (data) setCurrentAcademicYear(data.anno);
+        // 1. Anno Accademico Corrente
+        const { data: yearData } = await supabase.from('anni_accademici').select('anno').eq('is_current', true).single();
+        if (yearData) setCurrentAcademicYear(yearData.anno);
+
+        // 2. Parametri di Configurazione App (Permessi, etc.)
+        const { data: configData } = await supabase.from('config_app').select('*');
+        if (configData) {
+            const configMap = {};
+            configData.forEach(item => {
+                configMap[item.chiave] = item.valore;
+            });
+            setAppConfig(configMap);
+        }
     };
     fetchConfig();
 
@@ -53,38 +64,26 @@ export default function Dashboard() {
     }
     
   }, [navigate, activeView]);
-// --- GESTIONE RESPONSIVE (Resize Listener con Debounce) ---
+
+  // Gestione Responsive Sidebar
   useEffect(() => {
     let timeoutId;
-    
     const handleResize = () => {
-      // Pulisce il timeout precedente se l'utente sta ancora trascinando la finestra
       clearTimeout(timeoutId);
-      
-      // Imposta un nuovo timeout (Debounce)
       timeoutId = setTimeout(() => {
-        if (window.innerWidth < 768) {
-          setIsSidebarOpen(false); // Mobile: chiudi
-        } else {
-          setIsSidebarOpen(true);  // Desktop: apri
-        }
+        if (window.innerWidth < 768) setIsSidebarOpen(false);
+        else setIsSidebarOpen(true);
       }, 150);
     };
-
-    // Controllo iniziale al montaggio del componente
     if (window.innerWidth < 768) setIsSidebarOpen(false);
-
     window.addEventListener('resize', handleResize);
-    
-    // Cleanup: rimuovi listener e timeout quando il componente viene smontato
     return () => {
       window.removeEventListener('resize', handleResize);
       clearTimeout(timeoutId);
     };
   }, []);
-  const handleLogoutClick = () => {
-    setShowLogoutConfirm(true);
-  };
+
+  const handleLogoutClick = () => setShowLogoutConfirm(true);
 
   const handleLogoutConfirm = () => {
     localStorage.removeItem('accademia_user');
@@ -104,16 +103,24 @@ export default function Dashboard() {
   if (user.ruolo === 'Admin') menuItems.push({ id: 'utenti', label: 'Gestione Utenti', icon: <UserCog size={18}/> });
   if (user.ruolo !== 'Docente') menuItems.push({ id: 'docenti', label: 'Gestione Docenti', icon: <Users size={18}/> });
   menuItems.push({ id: 'alunni', label: 'Gestione Alunni', icon: <GraduationCap size={18}/> });
-  if (user.ruolo !== 'Docente') menuItems.push({ id: 'tipi_lezioni', label: 'Configurazioni & Anni', icon: <Settings size={18}/> });
   
+  // Tipi Lezioni (Configurazioni & Anni)
+  if (user.ruolo !== 'Docente') menuItems.push({ id: 'tipi_lezioni', label: 'Configurazioni & Anni', icon: <Settings size={18}/> });
+
   if (user.ruolo === 'Docente') menuItems.push({ id: 'calendario_personale', label: 'Il mio Calendario', icon: <Calendar size={18}/> });
   else menuItems.push({ id: 'calendario_docenti', label: 'Calendario Docenti', icon: <Calendar size={18}/> });
   
   menuItems.push({ id: 'registro_lezioni', label: 'Registro Lezioni', icon: <BookOpen size={18}/> });
+  
   if (user.ruolo !== 'Docente') {
     menuItems.push({ id: 'pagamenti', label: 'Registro Pagamenti', icon: <DollarSign size={18}/> });
     menuItems.push({ id: 'dettaglio_pagamenti', label: 'Riepilogo Pagamenti', icon: <TableProperties size={18}/> });
     menuItems.push({ id: 'finanza', label: 'Riepilogo Finanziario', icon: <ClipboardList size={18}/> });
+  }
+
+  // Nuova voce menu Configurazioni (Solo Admin)
+  if (user.ruolo === 'Admin') {
+      menuItems.push({ id: 'configurazioni', label: 'Configurazioni App', icon: <Settings size={18} className="text-accademia-red"/> });
   }
 
   const renderContent = () => {
@@ -121,13 +128,15 @@ export default function Dashboard() {
       case 'utenti': return <UtentiList />;
       case 'docenti': return <DocentiList userRole={user.ruolo} />;
       case 'alunni': return <AlunniList userRole={user.ruolo} userEmail={user.email} />;
-      case 'tipi_lezioni': return <TipiLezioni userRole={user.ruolo} />;
+      // Passiamo la config a TipiLezioni
+      case 'tipi_lezioni': return <TipiLezioni userRole={user.ruolo} config={appConfig} />;
       case 'calendario_personale': 
       case 'calendario_docenti': return <Calendario user={user} />;
       case 'registro_lezioni': return <RegistroLezioni user={user} currentGlobalYear={currentAcademicYear} />;
       case 'pagamenti': return <Pagamenti currentGlobalYear={currentAcademicYear} />;
       case 'dettaglio_pagamenti': return <DettaglioPagamenti />;
       case 'finanza': return <RiepilogoFinanziario />;
+      case 'configurazioni': return <ConfigurazioniApp />;
       default: return <div className="p-10 text-center text-gray-500">Seleziona una voce dal menu</div>;
     }
   };
@@ -183,16 +192,18 @@ export default function Dashboard() {
         </header>
         <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6 z-10 custom-scrollbar relative w-full">
             {isSidebarOpen && (<div className="fixed inset-0 bg-black/50 z-20 md:hidden backdrop-blur-sm" onClick={() => setIsSidebarOpen(false)}></div>)}
-            <div className="max-w-[1800px] mx-auto h-full flex flex-col"><div className="flex-1 bg-accademia-card border border-gray-800 rounded-xl shadow-2xl relative overflow-hidden flex flex-col h-full">
-  <Suspense fallback={
-    <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-4">
-      <div className="w-8 h-8 border-4 border-accademia-red border-t-transparent rounded-full animate-spin"></div>
-      <p className="text-sm font-light animate-pulse">Caricamento sezione...</p>
-    </div>
-  }>
-    {renderContent()}
-  </Suspense>
-</div></div>
+            <div className="max-w-[1800px] mx-auto h-full flex flex-col">
+                <div className="flex-1 bg-accademia-card border border-gray-800 rounded-xl shadow-2xl relative overflow-hidden flex flex-col h-full">
+                  <Suspense fallback={
+                    <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-4">
+                      <div className="w-8 h-8 border-4 border-accademia-red border-t-transparent rounded-full animate-spin"></div>
+                      <p className="text-sm font-light animate-pulse">Caricamento sezione...</p>
+                    </div>
+                  }>
+                    {renderContent()}
+                  </Suspense>
+                </div>
+            </div>
         </div>
       </main>
 

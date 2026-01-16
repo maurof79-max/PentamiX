@@ -3,9 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { 
   LogOut, Calendar, Users, DollarSign, BookOpen, Settings, 
-  UserCog, GraduationCap, ClipboardList, TableProperties, Menu, ChevronLeft
+  UserCog, GraduationCap, ClipboardList, TableProperties, Menu, ChevronLeft,
+  Shield 
 } from 'lucide-react';
-import ConfirmDialog from '../components/ConfirmDialog';
+import ConfirmDialog from '../components/ConfirmDialog'; // Assicurati che sia importato
 
 // COMPONENTS (Lazy Loading)
 const DocentiList = lazy(() => import('../components/DocentiList'));
@@ -17,34 +18,64 @@ const TipiLezioni = lazy(() => import('../components/TipiLezioni'));
 const UtentiList = lazy(() => import('../components/UtentiList'));
 const RiepilogoFinanziario = lazy(() => import('../components/RiepilogoFinanziario'));
 const DettaglioPagamenti = lazy(() => import('../components/DettaglioPagamenti'));
-// Nuovo componente per le configurazioni
 const ConfigurazioniApp = lazy(() => import('../components/ConfigurazioniApp'));
+const AccessLogs = lazy(() => import('../components/AccessLogs')); 
 
 export default function Dashboard() {
   const [user, setUser] = useState(null);
   const [activeView, setActiveView] = useState(''); 
   const [isSidebarOpen, setIsSidebarOpen] = useState(true); 
   const [currentAcademicYear, setCurrentAcademicYear] = useState('2025/2026');
-  const [appConfig, setAppConfig] = useState({}); // Stato per le configurazioni globali
+  const [appConfig, setAppConfig] = useState({}); 
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  
+  // STATI MODALI
+  const [showPasswordChangeModal, setShowPasswordChangeModal] = useState(false);
+  const [showSuccessDialog, setShowSuccessDialog] = useState(false); // <--- NUOVO
+  
   const navigate = useNavigate();
-
   const LOGO_URL = "https://mqdpojtisighqjmyzdwz.supabase.co/storage/v1/object/public/images/logo-glow.png";
 
   useEffect(() => {
-    const storedUser = localStorage.getItem('accademia_user');
-    if (!storedUser) { navigate('/'); return; }
-    
-    const parsedUser = JSON.parse(storedUser);
-    setUser(parsedUser);
+    const checkSession = async () => {
+        const { data: { session } } = await supabase.auth.getSession();
+        
+        if (!session) {
+            localStorage.removeItem('accademia_user');
+            navigate('/');
+            return;
+        }
 
-    // Fetch Global Config (Anno Corrente + Parametri App)
+        let currentUser = null;
+        const storedUser = localStorage.getItem('accademia_user');
+        
+        if (storedUser) {
+            currentUser = JSON.parse(storedUser);
+            setUser(currentUser);
+        } else {
+            const { data: profile } = await supabase.from('utenti').select('*').eq('id', session.user.id).single();
+            if (profile) {
+                currentUser = profile;
+                setUser(profile);
+                localStorage.setItem('accademia_user', JSON.stringify(profile));
+            }
+        }
+
+        if (currentUser && currentUser.must_change_password) {
+             setShowPasswordChangeModal(true);
+        }
+
+        if (!activeView && currentUser) {
+            if (currentUser.ruolo === 'Docente') setActiveView('calendario_personale'); 
+            else if (currentUser.ruolo === 'Admin') setActiveView('utenti');
+            else setActiveView('docenti');
+        }
+    };
+
     const fetchConfig = async () => {
-        // 1. Anno Accademico Corrente
         const { data: yearData } = await supabase.from('anni_accademici').select('anno').eq('is_current', true).single();
         if (yearData) setCurrentAcademicYear(yearData.anno);
 
-        // 2. Parametri di Configurazione App (Permessi, etc.)
         const { data: configData } = await supabase.from('config_app').select('*');
         if (configData) {
             const configMap = {};
@@ -54,18 +85,12 @@ export default function Dashboard() {
             setAppConfig(configMap);
         }
     };
+
+    checkSession();
     fetchConfig();
 
-    // Default View Logic
-    if (!activeView) {
-      if (parsedUser.ruolo === 'Docente') setActiveView('calendario_personale'); 
-      else if (parsedUser.ruolo === 'Admin') setActiveView('utenti');
-      else setActiveView('docenti');
-    }
-    
   }, [navigate, activeView]);
 
-  // Gestione Responsive Sidebar
   useEffect(() => {
     let timeoutId;
     const handleResize = () => {
@@ -85,7 +110,8 @@ export default function Dashboard() {
 
   const handleLogoutClick = () => setShowLogoutConfirm(true);
 
-  const handleLogoutConfirm = () => {
+  const handleLogoutConfirm = async () => {
+    await supabase.auth.signOut();
     localStorage.removeItem('accademia_user');
     navigate('/');
   };
@@ -103,24 +129,18 @@ export default function Dashboard() {
   if (user.ruolo === 'Admin') menuItems.push({ id: 'utenti', label: 'Gestione Utenti', icon: <UserCog size={18}/> });
   if (user.ruolo !== 'Docente') menuItems.push({ id: 'docenti', label: 'Gestione Docenti', icon: <Users size={18}/> });
   menuItems.push({ id: 'alunni', label: 'Gestione Alunni', icon: <GraduationCap size={18}/> });
-  
-  // Tipi Lezioni (Configurazioni & Anni)
   if (user.ruolo !== 'Docente') menuItems.push({ id: 'tipi_lezioni', label: 'Configurazioni & Anni', icon: <Settings size={18}/> });
-
   if (user.ruolo === 'Docente') menuItems.push({ id: 'calendario_personale', label: 'Il mio Calendario', icon: <Calendar size={18}/> });
   else menuItems.push({ id: 'calendario_docenti', label: 'Calendario Docenti', icon: <Calendar size={18}/> });
-  
   menuItems.push({ id: 'registro_lezioni', label: 'Registro Lezioni', icon: <BookOpen size={18}/> });
-  
   if (user.ruolo !== 'Docente') {
     menuItems.push({ id: 'pagamenti', label: 'Registro Pagamenti', icon: <DollarSign size={18}/> });
     menuItems.push({ id: 'dettaglio_pagamenti', label: 'Riepilogo Pagamenti', icon: <TableProperties size={18}/> });
     menuItems.push({ id: 'finanza', label: 'Riepilogo Finanziario', icon: <ClipboardList size={18}/> });
   }
-
-  // Nuova voce menu Configurazioni (Solo Admin)
   if (user.ruolo === 'Admin') {
       menuItems.push({ id: 'configurazioni', label: 'Configurazioni App', icon: <Settings size={18} className="text-accademia-red"/> });
+      menuItems.push({ id: 'logs', label: 'Log Accessi', icon: <Shield size={18} /> });
   }
 
   const renderContent = () => {
@@ -128,7 +148,6 @@ export default function Dashboard() {
       case 'utenti': return <UtentiList />;
       case 'docenti': return <DocentiList userRole={user.ruolo} />;
       case 'alunni': return <AlunniList userRole={user.ruolo} userEmail={user.email} />;
-      // Passiamo la config a TipiLezioni
       case 'tipi_lezioni': return <TipiLezioni userRole={user.ruolo} config={appConfig} />;
       case 'calendario_personale': 
       case 'calendario_docenti': return <Calendario user={user} />;
@@ -137,6 +156,7 @@ export default function Dashboard() {
       case 'dettaglio_pagamenti': return <DettaglioPagamenti />;
       case 'finanza': return <RiepilogoFinanziario />;
       case 'configurazioni': return <ConfigurazioniApp />;
+      case 'logs': return <AccessLogs />;
       default: return <div className="p-10 text-center text-gray-500">Seleziona una voce dal menu</div>;
     }
   };
@@ -144,6 +164,7 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen flex bg-accademia-dark text-accademia-text font-sans overflow-hidden">
       <aside className={`bg-accademia-card border-r border-gray-800 flex flex-col shadow-2xl z-30 transition-all duration-300 ease-in-out absolute md:relative h-full ${isSidebarOpen ? 'w-64 translate-x-0' : 'w-0 -translate-x-full md:w-0 md:translate-x-0 overflow-hidden'}`}>
+        {/* ... Sidebar Content ... */}
         <div className="p-6 border-b border-gray-800 flex justify-between items-center min-w-[16rem]">
           <div className="flex items-center justify-center w-full pr-2"> <img src={LOGO_URL} alt="Accademia Logo" className="h-auto w-full max-w-[130px] object-contain" /></div>
           <button onClick={() => setIsSidebarOpen(false)} className="md:hidden text-gray-400 hover:text-white"><ChevronLeft size={24} /></button>
@@ -163,7 +184,8 @@ export default function Dashboard() {
       </aside>
 
       <main className="flex-1 flex flex-col h-screen overflow-hidden bg-accademia-dark relative w-full">
-        <div className="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-gray-900 to-transparent pointer-events-none z-0"></div>
+        {/* ... Header Content ... */}
+         <div className="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-gray-900 to-transparent pointer-events-none z-0"></div>
         <header className="h-16 bg-accademia-card border-b border-gray-800 flex items-center justify-between px-4 z-20 shrink-0 gap-4 relative">
           <div className="flex items-center gap-4">
             <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-gray-400 hover:text-white p-2 hover:bg-gray-800 rounded-lg transition-colors"><Menu size={24} /></button>
@@ -190,16 +212,12 @@ export default function Dashboard() {
             </button>
           </div>
         </header>
+
         <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6 z-10 custom-scrollbar relative w-full">
             {isSidebarOpen && (<div className="fixed inset-0 bg-black/50 z-20 md:hidden backdrop-blur-sm" onClick={() => setIsSidebarOpen(false)}></div>)}
             <div className="max-w-[1800px] mx-auto h-full flex flex-col">
                 <div className="flex-1 bg-accademia-card border border-gray-800 rounded-xl shadow-2xl relative overflow-hidden flex flex-col h-full">
-                  <Suspense fallback={
-                    <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-4">
-                      <div className="w-8 h-8 border-4 border-accademia-red border-t-transparent rounded-full animate-spin"></div>
-                      <p className="text-sm font-light animate-pulse">Caricamento sezione...</p>
-                    </div>
-                  }>
+                  <Suspense fallback={<div className="flex items-center justify-center h-full text-gray-500">Caricamento...</div>}>
                     {renderContent()}
                   </Suspense>
                 </div>
@@ -207,6 +225,38 @@ export default function Dashboard() {
         </div>
       </main>
 
+      {/* --- MODALE CAMBIO PASSWORD (INPUT) --- */}
+      {showPasswordChangeModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
+          <div className="bg-accademia-card border border-red-500/50 w-full max-w-md rounded-xl shadow-2xl p-8 animate-in fade-in zoom-in-95">
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 bg-red-900/20 rounded-full flex items-center justify-center mx-auto mb-4 border border-red-500/30">
+                 <Settings className="text-accademia-red w-8 h-8" />
+              </div>
+              <h2 className="text-2xl font-bold text-white mb-2">Primo Accesso</h2>
+              <p className="text-gray-400 text-sm">
+                Per motivi di sicurezza, è necessario impostare una nuova password personale prima di continuare.
+              </p>
+            </div>
+
+            <ChangePasswordForm 
+              onSuccess={async () => {
+                await supabase.from('utenti').update({ must_change_password: false }).eq('id', user.id);
+                const updatedUser = { ...user, must_change_password: false };
+                setUser(updatedUser);
+                localStorage.setItem('accademia_user', JSON.stringify(updatedUser));
+                
+                // 1. Chiudiamo il modale di input
+                setShowPasswordChangeModal(false);
+                // 2. Apriamo il dialog di successo (invece dell'alert)
+                setShowSuccessDialog(true);
+              }} 
+            />
+          </div>
+        </div>
+      )}
+
+      {/* --- CONFIRM DIALOG LOGOUT --- */}
       <ConfirmDialog
         isOpen={showLogoutConfirm}
         type="warning"
@@ -218,6 +268,73 @@ export default function Dashboard() {
         onConfirm={handleLogoutConfirm}
         onCancel={() => setShowLogoutConfirm(false)}
       />
+
+      {/* --- CONFIRM DIALOG SUCCESSO PASSWORD --- */}
+      <ConfirmDialog
+        isOpen={showSuccessDialog}
+        type="success"
+        title="Password Aggiornata"
+        message="La tua password è stata modificata con successo. Benvenuto!"
+        confirmText="Prosegui"
+        showCancel={false} // Nasconde il tasto Annulla
+        onConfirm={() => setShowSuccessDialog(false)}
+      />
     </div>
+  );
+}
+
+// Sub-Component Form
+function ChangePasswordForm({ onSuccess }) {
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(null);
+    if (password.length < 6) return setError("La password deve essere di almeno 6 caratteri.");
+    if (password !== confirm) return setError("Le password non coincidono.");
+
+    setLoading(true);
+    try {
+      const { error: authError } = await supabase.auth.updateUser({ password: password });
+      if (authError) throw authError;
+      await onSuccess();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div>
+        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nuova Password</label>
+        <input 
+          type="password" required minLength={6}
+          className="w-full bg-accademia-input border border-gray-700 rounded-lg p-3 text-white focus:border-accademia-red outline-none focus:ring-1 focus:ring-accademia-red transition-all"
+          value={password} onChange={e => setPassword(e.target.value)}
+          placeholder="Minimo 6 caratteri"
+        />
+      </div>
+      <div>
+        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Conferma Password</label>
+        <input 
+          type="password" required minLength={6}
+          className="w-full bg-accademia-input border border-gray-700 rounded-lg p-3 text-white focus:border-accademia-red outline-none focus:ring-1 focus:ring-accademia-red transition-all"
+          value={confirm} onChange={e => setConfirm(e.target.value)}
+          placeholder="Ripeti password"
+        />
+      </div>
+      {error && <div className="p-3 bg-red-900/30 border border-red-800 rounded text-red-200 text-xs animate-in fade-in">{error}</div>}
+      <button 
+        type="submit" disabled={loading}
+        className="w-full py-3 bg-accademia-red hover:bg-red-700 text-white font-bold rounded-lg transition-all shadow-lg shadow-red-900/20 disabled:opacity-50 mt-2"
+      >
+        {loading ? 'Aggiornamento...' : 'IMPOSTA PASSWORD E ACCEDI'}
+      </button>
+    </form>
   );
 }

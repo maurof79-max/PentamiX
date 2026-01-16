@@ -21,33 +21,45 @@ export default function Login() {
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
   }
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    setError(null);
+const handleLogin = async (e) => {
+  e.preventDefault();
+  setLoading(true);
+  setError(null);
 
-    try {
-      const hash = await sha256(password);
-      
-      const { data, error } = await supabase
-        .from('utenti')
-        .select('*')
-        .eq('email', email)
-        .eq('password', hash)
-        .single();
+  try {
+    // 1. Autenticazione Nativa Supabase
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+      email: email,
+      password: password,
+    });
 
-      if (error || !data) throw new Error("Credenziali non valide");
-      if (data.stato !== 'Attivo') throw new Error("Account non attivo o sospeso");
+    if (authError) throw new Error("Credenziali non valide");
 
-      localStorage.setItem('accademia_user', JSON.stringify(data));
-      navigate('/dashboard');
+    // 2. Recuperiamo i dettagli del profilo (Ruolo, Nome, etc.) dalla tabella 'utenti'
+    const { data: userProfile, error: profileError } = await supabase
+      .from('utenti')
+      .select('*')
+      .eq('id', authData.user.id) // Usiamo l'ID restituito dall'Auth
+      .single();
 
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
+    if (profileError || !userProfile) throw new Error("Profilo utente non trovato.");
+    if (userProfile.stato !== 'Attivo') {
+        await supabase.auth.signOut(); // Logout immediato se sospeso
+        throw new Error("Account non attivo o sospeso");
     }
-  };
+
+    // 3. Salviamo nel localStorage (opzionale, Supabase gestisce la sessione, 
+    // ma il tuo codice Dashboard usa 'accademia_user', quindi lo manteniamo per compatibilità)
+    localStorage.setItem('accademia_user', JSON.stringify(userProfile));
+    
+    navigate('/dashboard');
+
+  } catch (err) {
+    setError(err.message);
+  } finally {
+    setLoading(false);
+  }
+};
 
   const handlePasswordReset = async (e) => {
     e.preventDefault();

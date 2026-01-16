@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { createClient } from '@supabase/supabase-js'; 
 import { supabase } from '../supabaseClient';
-import { Plus, X, Edit2, Trash2, Link as LinkIcon, UserPlus } from 'lucide-react';
+import { X, Edit2, Trash2, Link as LinkIcon, UserPlus, AlertTriangle } from 'lucide-react';
+import ConfirmDialog from './ConfirmDialog'; // IMPORTA IL COMPONENTE
 
 export default function UtentiList() {
   const [utenti, setUtenti] = useState([]);
@@ -10,16 +12,21 @@ export default function UtentiList() {
   const [showModal, setShowModal] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
 
-  // --- FETCH DATI ---
+  // STATO PER IL MESSAGGIO DI SUCCESSO
+  const [successDialog, setSuccessDialog] = useState({ 
+    isOpen: false, 
+    title: '', 
+    message: '' 
+  });
+
   const fetchUtenti = async () => {
     setLoading(true);
-    // Join utenti con docenti per mostrare il nome del docente collegato
     const { data: userData, error } = await supabase
       .from('utenti')
       .select('*, docenti(nome)')
       .order('nome_esteso');
     
-    if (error) console.error(error);
+    if (error) console.error("Errore fetch utenti:", error);
     else setUtenti(userData || []);
     setLoading(false);
   };
@@ -34,21 +41,21 @@ export default function UtentiList() {
     fetchDocenti();
   }, []);
 
-  // --- HANDLERS ---
   const handleOpenModal = (user = null) => {
     setEditingUser(user);
     setShowModal(true);
   };
 
-  const handleDelete = async (email) => {
-    if (!confirm(`Eliminare l'utente ${email}?`)) return;
-    const { error } = await supabase.from('utenti').delete().eq('email', email);
-    if (error) alert("Errore: " + error.message);
+  const handleDelete = async (user) => {
+    if (!confirm(`Sei sicuro di voler rimuovere l'accesso a ${user.nome_esteso}?`)) return;
+    const { error } = await supabase.from('utenti').delete().eq('id', user.id);
+    if (error) alert("Errore durante l'eliminazione: " + error.message);
     else fetchUtenti();
   };
 
   return (
     <div className="p-0 relative">
+      {/* ... Header e Tabella ... */}
       <div className="p-4 border-b border-gray-800 flex justify-between items-center">
         <h3 className="text-lg font-light text-white">Amministrazione Accessi</h3>
         <button 
@@ -64,15 +71,15 @@ export default function UtentiList() {
           <thead className="bg-gray-900/50 text-gray-400 uppercase text-xs">
             <tr>
               <th className="px-6 py-4 font-semibold">Nome Utente</th>
-              <th className="px-6 py-4 font-semibold">Email (Login)</th>
+              <th className="px-6 py-4 font-semibold">Email</th>
               <th className="px-6 py-4 font-semibold">Ruolo</th>
               <th className="px-6 py-4 font-semibold">Docente Associato</th>
               <th className="px-6 py-4 font-semibold text-right">Azioni</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800">
-            {utenti.map(u => (
-              <tr key={u.email} className="hover:bg-gray-800/30 transition-colors">
+            {utenti.map((u, index) => (
+              <tr key={u.id || index} className="hover:bg-gray-800/30 transition-colors">
                 <td className="px-6 py-4 font-medium text-white">{u.nome_esteso}</td>
                 <td className="px-6 py-4 font-mono text-gray-400 text-xs">{u.email}</td>
                 <td className="px-6 py-4">
@@ -93,7 +100,7 @@ export default function UtentiList() {
                 </td>
                 <td className="px-6 py-4 text-right flex justify-end gap-2">
                   <button onClick={() => handleOpenModal(u)} className="p-1 hover:bg-gray-700 rounded text-blue-400"><Edit2 size={16}/></button>
-                  <button onClick={() => handleDelete(u.email)} className="p-1 hover:bg-gray-700 rounded text-red-400"><Trash2 size={16}/></button>
+                  <button onClick={() => handleDelete(u)} className="p-1 hover:bg-gray-700 rounded text-red-400"><Trash2 size={16}/></button>
                 </td>
               </tr>
             ))}
@@ -106,19 +113,29 @@ export default function UtentiList() {
           user={editingUser} 
           docenti={docenti}
           onClose={() => setShowModal(false)}
-          onSave={() => { setShowModal(false); fetchUtenti(); }}
+          onSave={(msgTitle, msgBody) => { 
+            setShowModal(false); 
+            fetchUtenti();
+            // Se la modale restituisce un messaggio (creazione), mostriamo il dialog
+            if (msgTitle) {
+                setSuccessDialog({ isOpen: true, title: msgTitle, message: msgBody });
+            }
+          }}
         />
       )}
+
+      {/* DIALOG DI SUCCESSO */}
+      <ConfirmDialog
+        isOpen={successDialog.isOpen}
+        type="success"
+        title={successDialog.title}
+        message={successDialog.message}
+        confirmText="OK"
+        showCancel={false}
+        onConfirm={() => setSuccessDialog({ ...successDialog, isOpen: false })}
+      />
     </div>
   );
-}
-
-// Helper per hash SHA-256 (copiato da Login.jsx per coerenza)
-async function sha256(message) {
-    const msgBuffer = new TextEncoder().encode(message);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 function ModalUtente({ user, docenti, onClose, onSave }) {
@@ -127,125 +144,140 @@ function ModalUtente({ user, docenti, onClose, onSave }) {
     nome_esteso: user?.nome_esteso || '',
     ruolo: user?.ruolo || 'Docente',
     id_collegato: user?.id_collegato || '',
-    password: '' // Solo per nuovo inserimento o reset
+    password: '' 
   });
-
+  const [loading, setLoading] = useState(false);
   const isEdit = !!user;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setLoading(true);
+
     try {
-      const payload = {
-        email: formData.email,
-        nome_esteso: formData.nome_esteso,
-        ruolo: formData.ruolo,
-        id_collegato: formData.ruolo === 'Docente' ? formData.id_collegato : null,
-        stato: 'Attivo'
-      };
-
-      // Se c'è una password, hashala e aggiungila
-      if (formData.password) {
-        payload.password = await sha256(formData.password);
-      }
-
       if (isEdit) {
-        // Update (non permettiamo cambio email qui per semplicità PK)
-        delete payload.email; 
-        const { error } = await supabase.from('utenti').update(payload).eq('email', formData.email);
+        // UPDATE
+        const { error } = await supabase
+          .from('utenti')
+          .update({
+            nome_esteso: formData.nome_esteso,
+            ruolo: formData.ruolo,
+            id_collegato: formData.ruolo === 'Docente' ? formData.id_collegato : null
+          })
+          .eq('id', user.id);
         if (error) throw error;
+        
+        onSave("Utente Modificato", "I dati dell'utente sono stati aggiornati correttamente.");
+
       } else {
-        // Insert
-        if (!formData.password) return alert("Password richiesta per nuovi utenti");
-        const { error } = await supabase.from('utenti').insert([payload]);
-        if (error) throw error;
+        // CREATE
+        if (!formData.password || formData.password.length < 6) throw new Error("Password troppo corta.");
+
+        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+        const supabaseKey = import.meta.env.VITE_SUPABASE_KEY;
+        
+        const memoryStorage = {
+          getItem: () => null,
+          setItem: () => {},
+          removeItem: () => {},
+        };
+
+        const tempClient = createClient(supabaseUrl, supabaseKey, {
+            auth: {
+                storage: memoryStorage,
+                persistSession: false,     // Non salvare sessione
+                autoRefreshToken: false,   // Non refreshare token
+                detectSessionInUrl: false  // Ignora URL
+            },
+            // AGGIUNTA: Disabilita i warning globali per questo client isolato
+            global: {
+                headers: { 'x-client-info': 'temp-admin-creation' } 
+            }
+        });
+
+        const { data: authData, error: authError } = await tempClient.auth.signUp({
+          email: formData.email,
+          password: formData.password,
+        });
+
+        if (authError) throw authError;
+        if (!authData.user) throw new Error("Errore creazione Auth.");
+
+        const { error: profileError } = await supabase
+          .from('utenti')
+          .insert([{
+            id: authData.user.id,
+            email: formData.email,
+            nome_esteso: formData.nome_esteso,
+            ruolo: formData.ruolo,
+            stato: 'Attivo',
+            id_collegato: formData.ruolo === 'Docente' ? formData.id_collegato : null,
+            must_change_password: true
+          }]);
+
+        if (profileError) throw new Error("Utente Auth creato, ma errore DB Profilo: " + profileError.message);
+
+        // Passiamo i dati al parent per mostrarli nel dialog
+        onSave(
+            "Utente Creato", 
+            `Utente creato con successo!\nEmail: ${formData.email}\nPassword Provvisoria: ${formData.password}`
+        );
       }
-      onSave();
     } catch(err) {
-      alert("Errore: " + err.message);
+      alert("Errore: " + err.message); // Qui lasciamo alert per gli errori o puoi usare un altro stato
+    } finally {
+      setLoading(false);
     }
   };
 
+  // ... (Il resto del JSX del Form rimane identico a prima) ...
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={onClose}></div>
       <div className="relative bg-accademia-card border border-gray-700 w-full max-w-md rounded-xl shadow-2xl p-6 animate-in fade-in zoom-in-95 duration-200">
-        
         <div className="flex justify-between mb-6">
-          <h3 className="text-xl font-bold text-white">{isEdit ? 'Modifica Utente' : 'Nuovo Utente'}</h3>
+          <h3 className="text-xl font-bold text-white">{isEdit ? 'Modifica Profilo' : 'Nuovo Utente'}</h3>
           <button onClick={onClose}><X className="text-gray-400 hover:text-white"/></button>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Nome e Cognome</label>
-            <input 
-              type="text" 
-              value={formData.nome_esteso} 
-              onChange={e => setFormData({...formData, nome_esteso: e.target.value})} 
-              className="w-full bg-accademia-input border border-gray-700 rounded-lg p-2.5 text-white focus:border-accademia-red focus:outline-none" 
-              required 
-            />
+            <input type="text" value={formData.nome_esteso} onChange={e => setFormData({...formData, nome_esteso: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded-lg p-2.5 text-white focus:border-accademia-red focus:outline-none" required />
           </div>
-
           <div>
             <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Email (Login)</label>
-            <input 
-              type="email" 
-              value={formData.email} 
-              onChange={e => setFormData({...formData, email: e.target.value})} 
-              disabled={isEdit}
-              className="w-full bg-accademia-input border border-gray-700 rounded-lg p-2.5 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50" 
-              required 
-            />
+            <input type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} disabled={isEdit} className="w-full bg-accademia-input border border-gray-700 rounded-lg p-2.5 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50" required />
           </div>
-
-          <div>
-            <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">
-              {isEdit ? 'Nuova Password (lascia vuoto per non cambiare)' : 'Password'}
-            </label>
-            <input 
-              type="password" 
-              value={formData.password} 
-              onChange={e => setFormData({...formData, password: e.target.value})} 
-              className="w-full bg-accademia-input border border-gray-700 rounded-lg p-2.5 text-white focus:border-accademia-red focus:outline-none" 
-              required={!isEdit}
-            />
-          </div>
-
+          {!isEdit && (
+            <div className="bg-yellow-900/10 border border-yellow-800/30 p-3 rounded-lg">
+                <label className="block text-xs font-bold text-yellow-500 mb-1 uppercase">Password Provvisoria</label>
+                <input type="text" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded-lg p-2.5 text-white focus:border-yellow-500 focus:outline-none font-mono" placeholder="Es: Musica2025!" required minLength={6} />
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Ruolo</label>
-              <select 
-                value={formData.ruolo} 
-                onChange={e => setFormData({...formData, ruolo: e.target.value})} 
-                className="w-full bg-accademia-input border border-gray-700 rounded-lg p-2.5 text-white focus:border-accademia-red focus:outline-none"
-              >
+              <select value={formData.ruolo} onChange={e => setFormData({...formData, ruolo: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded-lg p-2.5 text-white focus:border-accademia-red focus:outline-none">
                 <option value="Docente">Docente</option>
                 <option value="Gestore">Gestore</option>
                 <option value="Admin">Admin</option>
               </select>
             </div>
           </div>
-
-          {/* Selezione Docente (Solo se ruolo è Docente) */}
           {formData.ruolo === 'Docente' && (
             <div className="p-3 border border-red-900/30 bg-red-900/10 rounded-lg">
               <label className="block text-xs font-bold text-accademia-red mb-1 uppercase">Associa ad Anagrafica</label>
-              <select 
-                value={formData.id_collegato} 
-                onChange={e => setFormData({...formData, id_collegato: e.target.value})} 
-                className="w-full bg-accademia-input border border-gray-700 rounded-lg p-2.5 text-white focus:border-accademia-red focus:outline-none"
-              >
+              <select value={formData.id_collegato} onChange={e => setFormData({...formData, id_collegato: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded-lg p-2.5 text-white focus:border-accademia-red focus:outline-none">
                 <option value="">-- Seleziona Docente --</option>
                 {docenti.map(d => <option key={d.id} value={d.id}>{d.nome}</option>)}
               </select>
-              <p className="text-[10px] text-gray-500 mt-1">Collega questo login alla scheda docente per permessi e filtri.</p>
             </div>
           )}
-
           <div className="flex justify-end gap-3 pt-4 border-t border-gray-800">
             <button type="button" onClick={onClose} className="px-4 py-2 text-gray-300 hover:text-white">Annulla</button>
-            <button type="submit" className="px-6 py-2 bg-accademia-red hover:bg-red-700 text-white rounded-lg font-bold shadow-lg">Salva</button>
+            <button type="submit" disabled={loading} className="px-6 py-2 bg-accademia-red hover:bg-red-700 text-white rounded-lg font-bold shadow-lg disabled:opacity-50">
+              {loading ? 'Salvataggio...' : 'Salva'}
+            </button>
           </div>
         </form>
       </div>

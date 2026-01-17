@@ -6,7 +6,7 @@ import ConfirmDialog from './ConfirmDialog';
 
 // --- IMPORT CENTRALIZZATO ---
 import { 
-  MESI_STANDARD as MESI, // Nel registro usiamo solo i mesi reali
+  MESI_STANDARD as MESI, 
   getCurrentAcademicYear 
 } from '../utils/constants';
 
@@ -18,7 +18,6 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
   const [docenti, setDocenti] = useState([]);
   const [alunni, setAlunni] = useState([]);
   
-  // Usiamo 'tariffe' per la selezione nel form, ma visualizziamo 'tipi_lezioni' storico
   const [tariffeAnno, setTariffeAnno] = useState([]); 
 
   // Inizializza filtri
@@ -67,19 +66,44 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
     }
   }, [currentGlobalYear, user.ruolo]);
 
-  // --- 3. Carica Risorse ---
+  // --- 3. Carica Risorse (MODIFICATO PER COGNOME NOME) ---
   useEffect(() => {
     const fetchResources = async () => {
-      // Docenti
+      // Docenti (Solo se non è docente)
       if (user.ruolo !== 'Docente') {
-        const { data: d } = await supabase.from('docenti').select('id, nome').order('nome');
-        setDocenti(d || []);
+        const { data: d } = await supabase.from('docenti').select('id, nome, cognome').order('cognome');
+        // Uniamo cognome e nome per visualizzazione pulita
+        const docentiFormatted = d?.map(doc => ({
+            ...doc,
+            nome_completo: `${doc.cognome} ${doc.nome}`
+        })) || [];
+        setDocenti(docentiFormatted);
       }
-      // Alunni
-      const { data: a } = await supabase.from('alunni').select('id, nome').order('nome');
-      setAlunni(a || []);
+
+      // Alunni: Se docente, carica solo i suoi associati. Se admin, tutti.
+      let alunniList = [];
+      if (user.ruolo === 'Docente') {
+          // Fetch tramite associazioni per vedere solo i propri studenti
+          const { data: assocData } = await supabase
+            .from('associazioni')
+            .select('alunni(id, nome, cognome)')
+            .eq('docente_id', user.id_collegato);
+          
+          alunniList = assocData?.map(a => a.alunni).filter(Boolean) || [];
+      } else {
+          // Admin vede tutti (RLS filtra per scuola)
+          const { data: a } = await supabase
+            .from('alunni')
+            .select('id, nome, cognome')
+            .eq('stato', 'Attivo');
+          alunniList = a || [];
+      }
+
+      // Ordinamento locale per Cognome
+      alunniList.sort((a, b) => (a.cognome || '').localeCompare(b.cognome || ''));
+      setAlunni(alunniList);
       
-      // Tariffe per il FORM (nuovi inserimenti)
+      // Tariffe per il FORM
       if (filters.anno) {
           const { data: t } = await supabase
             .from('tariffe')
@@ -92,7 +116,7 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
     fetchResources();
   }, [filters.anno, user]);
 
-  // --- 4. Fetch Lezioni ---
+  // --- 4. Fetch Lezioni (MODIFICATO SELECT) ---
   const fetchLezioni = async () => {
     if (!filters.anno) return; 
     setLoading(true);
@@ -105,8 +129,8 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
         .from('registro')
         .select(`
           id, data_lezione, convalidato, anno_accademico,
-          docenti ( id, nome ),
-          alunni ( id, nome ),
+          docenti ( id, nome, cognome ),
+          alunni ( id, nome, cognome ),
           tipi_lezioni ( tipo, costo )
         `)
         .gte('data_lezione', startDate)
@@ -184,7 +208,7 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
       return true; 
   };
 
-  // --- CRUD ---
+  // --- CRUD & SORTING (MODIFICATO PER COGNOME) ---
   const handleSort = (key) => {
     let direction = 'asc';
     if (sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
@@ -196,15 +220,25 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
       let valA, valB;
       switch(sortConfig.key) {
           case 'data_lezione': valA = new Date(a.data_lezione); valB = new Date(b.data_lezione); break;
-          case 'docente': valA = a.docenti?.nome?.toLowerCase()||''; valB = b.docenti?.nome?.toLowerCase()||''; break;
-          case 'alunno': valA = a.alunni?.nome?.toLowerCase()||''; valB = b.alunni?.nome?.toLowerCase()||''; break;
-          case 'tipo': valA = (a.tipi_lezioni?.tipo || a.tariffe?.tipo_lezione || '').toLowerCase(); 
-                       valB = (b.tipi_lezioni?.tipo || b.tariffe?.tipo_lezione || '').toLowerCase(); break;
+          // Ordina per Cognome Docente
+          case 'docente': 
+            valA = (a.docenti?.cognome || a.docenti?.nome || '').toLowerCase(); 
+            valB = (b.docenti?.cognome || b.docenti?.nome || '').toLowerCase(); 
+            break;
+          // Ordina per Cognome Alunno
+          case 'alunno': 
+            valA = (a.alunni?.cognome || a.alunni?.nome || '').toLowerCase(); 
+            valB = (b.alunni?.cognome || b.alunni?.nome || '').toLowerCase(); 
+            break;
+          case 'tipo': 
+            valA = (a.tipi_lezioni?.tipo || a.tariffe?.tipo_lezione || '').toLowerCase(); 
+            valB = (b.tipi_lezioni?.tipo || b.tariffe?.tipo_lezione || '').toLowerCase(); 
+            break;
           default: return 0;
       }
       return (valA < valB ? -1 : 1) * (sortConfig.direction === 'asc' ? 1 : -1);
     });
-  }, [lezioni, sortConfig]); // Dipendenze: ricalcola solo se cambiano i dati o la configurazione
+  }, [lezioni, sortConfig]);
 
   const handleDeleteClick = async (row) => {
     const hasPermission = await checkPermission(row.anno_accademico);
@@ -214,7 +248,7 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
       isOpen: true,
       type: 'danger',
       title: 'Elimina Lezione',
-      message: `Sei sicuro di voler eliminare questa lezione?\n\nData: ${new Date(row.data_lezione).toLocaleDateString('it-IT')}\nAlunno: ${row.alunni?.nome}\n\nQuesta azione non può essere annullata.`,
+      message: `Sei sicuro di voler eliminare questa lezione?\n\nData: ${new Date(row.data_lezione).toLocaleDateString('it-IT')}\nAlunno: ${row.alunni?.cognome} ${row.alunni?.nome}\n\nQuesta azione non può essere annullata.`,
       confirmText: 'Elimina',
       cancelText: 'Annulla',
       showCancel: true,
@@ -285,12 +319,12 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
           {user.ruolo !== 'Docente' && (
             <select name="docente_id" value={filters.docente_id} onChange={(e) => setFilters({...filters, docente_id:e.target.value})} className="bg-accademia-input border border-gray-700 text-white text-sm rounded px-3 py-2 focus:border-accademia-red focus:outline-none">
               <option value="">Tutti i Docenti</option>
-              {docenti.map(d => <option key={d.id} value={d.id}>{d.nome}</option>)}
+              {docenti.map(d => <option key={d.id} value={d.id}>{d.nome_completo}</option>)}
             </select>
           )}
           <select name="alunno_id" value={filters.alunno_id} onChange={(e) => setFilters({...filters, alunno_id:e.target.value})} className="bg-accademia-input border border-gray-700 text-white text-sm rounded px-3 py-2 focus:border-accademia-red focus:outline-none">
             <option value="">Tutti gli Alunni</option>
-            {alunni.map(a => <option key={a.id} value={a.id}>{a.nome}</option>)}
+            {alunni.map(a => <option key={a.id} value={a.id}>{a.cognome} {a.nome}</option>)}
           </select>
           <select name="mese" value={filters.mese} onChange={(e) => setFilters({...filters, mese:e.target.value})} className="bg-accademia-input border border-gray-700 text-white text-sm rounded px-3 py-2 focus:border-accademia-red focus:outline-none">
             <option value="">Tutti i Mesi</option>
@@ -322,8 +356,8 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
              sortedLezioni.map(row => (
                 <tr key={row.id} className="hover:bg-gray-800/30 transition-colors group">
                   <td className="px-6 py-3 font-mono text-gray-300">{new Date(row.data_lezione).toLocaleDateString('it-IT')}</td>
-                  <td className="px-6 py-3 text-white">{row.docenti?.nome}</td>
-                  <td className="px-6 py-3 font-medium text-white">{row.alunni?.nome}</td>
+                  <td className="px-6 py-3 text-white">{row.docenti?.cognome} {row.docenti?.nome}</td>
+                  <td className="px-6 py-3 font-medium text-white">{row.alunni?.cognome} {row.alunni?.nome}</td>
                   <td className="px-6 py-3 text-gray-400">
                       {row.tipi_lezioni?.tipo || row.tariffe?.tipo_lezione || '-'}
                   </td>
@@ -367,7 +401,7 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
   );
 }
 
-// --- MODALE ---
+// --- MODALE (MODIFICATO PER VISUALIZZARE COGNOME NOME) ---
 function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose, onSave }) {
   const [formData, setFormData] = useState({
     id: lezione?.id || null,
@@ -383,25 +417,19 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
     try {
       let tipoLezioneId = formData.tipo_lezione_id;
 
-      // Solo per NUOVI inserimenti: converti tariffa -> tipo_lezione
       if (!formData.id) {
-        // Verifica che tipo_lezione_id non sia vuoto
         if (!formData.tipo_lezione_id) {
           alert("Seleziona un tipo di lezione");
           return;
         }
         
-        // 1. Recupera la tariffa selezionata (confronto flessibile string/number)
         const tariffaSelezionata = tariffe.find(t => String(t.id) === String(formData.tipo_lezione_id));
         
         if (!tariffaSelezionata) {
           alert("Errore: tariffa non trovata. Riprova.");
-          console.error('Tariffa non trovata! ID cercato:', formData.tipo_lezione_id);
-          console.error('Tariffe disponibili:', tariffe);
           return;
         }
 
-        // 2. Cerca se esiste già un record in tipi_lezioni con questo tipo e costo
         const { data: existingTipo, error: searchError } = await supabase
           .from('tipi_lezioni')
           .select('id')
@@ -409,17 +437,12 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
           .eq('costo', tariffaSelezionata.costo)
           .maybeSingle();
 
-        if (searchError && searchError.code !== 'PGRST116') {
-          throw searchError;
-        }
+        if (searchError && searchError.code !== 'PGRST116') throw searchError;
 
         if (existingTipo) {
-          // Usa l'ID esistente
           tipoLezioneId = existingTipo.id;
         } else {
-          // Crea nuovo record in tipi_lezioni
           const newTipoId = 'TL' + Date.now();
-          
           const { error: insertTipoError } = await supabase
             .from('tipi_lezioni')
             .insert([{
@@ -429,12 +452,10 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
             }]);
 
           if (insertTipoError) throw insertTipoError;
-          
           tipoLezioneId = newTipoId;
         }
       }
 
-      // 3. Salva nel registro
       const payload = {
         docente_id: formData.docente_id,
         alunno_id: formData.alunno_id,
@@ -445,11 +466,9 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
       };
 
       if (formData.id) {
-        // UPDATE
         const { error } = await supabase.from('registro').update(payload).eq('id', formData.id);
         if (error) throw error;
       } else {
-        // INSERT
         const newId = 'R' + Date.now();
         const { error } = await supabase.from('registro').insert([{ ...payload, id: newId }]);
         if (error) throw error;
@@ -481,7 +500,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
                 required
               >
                 <option value="">Seleziona...</option>
-                {docenti.map(d=><option key={d.id} value={d.id}>{d.nome}</option>)}
+                {docenti.map(d=><option key={d.id} value={d.id}>{d.nome_completo}</option>)}
               </select>
             </div>
           )}
@@ -495,7 +514,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
               required
             >
               <option value="">Seleziona...</option>
-              {alunni.map(a=><option key={a.id} value={a.id}>{a.nome}</option>)}
+              {alunni.map(a=><option key={a.id} value={a.id}>{a.cognome} {a.nome}</option>)}
             </select>
           </div>
           
@@ -504,7 +523,6 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
               Tipo Lezione {!formData.id && `(Tariffa ${anno})`}
             </label>
             {!formData.id ? (
-              // NUOVO INSERIMENTO: mostra tariffe
               <>
                 <select 
                   value={formData.tipo_lezione_id} 
@@ -524,7 +542,6 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
                 )}
               </>
             ) : (
-              // MODIFICA: mostra tipo corrente (readonly)
               <div className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-gray-400 cursor-not-allowed">
                 {lezione?.tipi_lezioni?.tipo || 'N/A'} (€ {lezione?.tipi_lezioni?.costo || 0})
               </div>

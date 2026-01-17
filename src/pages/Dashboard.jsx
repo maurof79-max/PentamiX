@@ -4,9 +4,26 @@ import { supabase } from '../supabaseClient';
 import { 
   LogOut, Calendar, Users, DollarSign, BookOpen, Settings, 
   UserCog, GraduationCap, ClipboardList, TableProperties, Menu, ChevronLeft,
-  Shield 
+  Shield, LayoutDashboard, Building 
 } from 'lucide-react';
-import ConfirmDialog from '../components/ConfirmDialog'; // Assicurati che sia importato
+import ConfirmDialog from '../components/ConfirmDialog';
+
+// MAPPA ICONE: Stringa DB -> Componente React
+const ICON_MAP = {
+    'Users': <Users size={18} />,
+    'GraduationCap': <GraduationCap size={18} />,
+    'Settings': <Settings size={18} />,
+    'Calendar': <Calendar size={18} />,
+    'BookOpen': <BookOpen size={18} />,
+    'DollarSign': <DollarSign size={18} />,
+    'TableProperties': <TableProperties size={18} />,
+    'ClipboardList': <ClipboardList size={18} />,
+    'UserCog': <UserCog size={18} />,
+    'SettingsRed': <Settings size={18} className="text-accademia-red" />,
+    'Shield': <Shield size={18} />,
+    'LayoutDashboard': <LayoutDashboard size={18} />, 
+    'Building': <Building size={18} /> 
+};
 
 // COMPONENTS (Lazy Loading)
 const DocentiList = lazy(() => import('../components/DocentiList'));
@@ -20,26 +37,34 @@ const RiepilogoFinanziario = lazy(() => import('../components/RiepilogoFinanziar
 const DettaglioPagamenti = lazy(() => import('../components/DettaglioPagamenti'));
 const ConfigurazioniApp = lazy(() => import('../components/ConfigurazioniApp'));
 const AccessLogs = lazy(() => import('../components/AccessLogs')); 
+const GestioneMenu = lazy(() => import('../components/GestioneMenu'));     
+const GestioneScuole = lazy(() => import('../components/GestioneScuole')); 
 
 export default function Dashboard() {
   const [user, setUser] = useState(null);
   const [activeView, setActiveView] = useState(''); 
+  
+  // STRUTTURA MENU RAGGRUPPATA
+  const [menuGroups, setMenuGroups] = useState([]); 
+  
   const [isSidebarOpen, setIsSidebarOpen] = useState(true); 
   const [currentAcademicYear, setCurrentAcademicYear] = useState('2025/2026');
   const [appConfig, setAppConfig] = useState({}); 
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   
+  // Dati Scuola Corrente
+  const [schoolInfo, setSchoolInfo] = useState({ name: '', logo: '' });
+
   // STATI MODALI
   const [showPasswordChangeModal, setShowPasswordChangeModal] = useState(false);
-  const [showSuccessDialog, setShowSuccessDialog] = useState(false); // <--- NUOVO
+  const [showSuccessDialog, setShowSuccessDialog] = useState(false);
   
   const navigate = useNavigate();
-  const LOGO_URL = "https://mqdpojtisighqjmyzdwz.supabase.co/storage/v1/object/public/images/logo-glow.png";
+  const DEFAULT_LOGO = "https://mqdpojtisighqjmyzdwz.supabase.co/storage/v1/object/public/images/logo-glow.png";
 
   useEffect(() => {
-    const checkSession = async () => {
+    const initDashboard = async () => {
         const { data: { session } } = await supabase.auth.getSession();
-        
         if (!session) {
             localStorage.removeItem('accademia_user');
             navigate('/');
@@ -47,50 +72,85 @@ export default function Dashboard() {
         }
 
         let currentUser = null;
-        const storedUser = localStorage.getItem('accademia_user');
-        
-        if (storedUser) {
-            currentUser = JSON.parse(storedUser);
-            setUser(currentUser);
-        } else {
-            const { data: profile } = await supabase.from('utenti').select('*').eq('id', session.user.id).single();
-            if (profile) {
-                currentUser = profile;
-                setUser(profile);
-                localStorage.setItem('accademia_user', JSON.stringify(profile));
+        const { data: profile } = await supabase
+            .from('utenti')
+            .select('*, scuole(nome, logo_url, moduli_attivi)') 
+            .eq('id', session.user.id)
+            .single();
+
+        if (profile) {
+            currentUser = profile;
+            setUser(profile);
+            localStorage.setItem('accademia_user', JSON.stringify(profile));
+
+            // --- LOGICA BRANDING (Modificata) ---
+            if (profile.ruolo === 'Admin') {
+                // ADMIN: Usa sempre il branding dell'Applicazione (Accademia)
+                setSchoolInfo({
+                    name: 'Amministrazione', // O lascia vuoto '' se preferisci
+                    logo: DEFAULT_LOGO
+                });
+            } else {
+                // UTENTI STANDARD: Usano il branding della Scuola
+                setSchoolInfo({
+                    name: profile.scuole?.nome || 'Nessuna Scuola',
+                    logo: profile.scuole?.logo_url || DEFAULT_LOGO
+                });
+            }
+
+            const activeModules = profile.scuole?.moduli_attivi || [];
+
+            // 1. CARICHIAMO I MODULI
+            const { data: moduliData } = await supabase.from('sys_moduli').select('*').order('ordine');
+            // 2. CARICHIAMO LE SCHEDE
+            const { data: schedeData } = await supabase.from('sys_schede').select('*').order('ordine');
+
+            if (moduliData && schedeData) {
+                const groups = [];
+                moduliData.forEach(mod => {
+                    const validItems = schedeData.filter(scheda => {
+                        if (scheda.modulo_codice !== mod.codice) return false;
+                        if (profile.ruolo === 'Admin') return true;
+                        if (!activeModules.includes(mod.codice)) return false;
+                        if (scheda.ruoli_ammessi && !scheda.ruoli_ammessi.includes(profile.ruolo)) return false;
+                        return true;
+                    }).map(scheda => ({
+                        id: scheda.codice_vista,
+                        label: scheda.etichetta,
+                        icon: ICON_MAP[scheda.icona] || <Settings size={18} /> 
+                    }));
+
+                    if (validItems.length > 0) {
+                        groups.push({
+                            moduleCode: mod.codice,
+                            moduleLabel: mod.etichetta,
+                            items: validItems
+                        });
+                    }
+                });
+                setMenuGroups(groups);
+                if (!activeView && groups.length > 0 && groups[0].items.length > 0) {
+                    setActiveView(groups[0].items[0].id);
+                }
             }
         }
 
-        if (currentUser && currentUser.must_change_password) {
-             setShowPasswordChangeModal(true);
-        }
-
-        if (!activeView && currentUser) {
-            if (currentUser.ruolo === 'Docente') setActiveView('calendario_personale'); 
-            else if (currentUser.ruolo === 'Admin') setActiveView('utenti');
-            else setActiveView('docenti');
-        }
-    };
-
-    const fetchConfig = async () => {
+        if (currentUser && currentUser.must_change_password) setShowPasswordChangeModal(true);
+        
         const { data: yearData } = await supabase.from('anni_accademici').select('anno').eq('is_current', true).single();
         if (yearData) setCurrentAcademicYear(yearData.anno);
 
         const { data: configData } = await supabase.from('config_app').select('*');
         if (configData) {
             const configMap = {};
-            configData.forEach(item => {
-                configMap[item.chiave] = item.valore;
-            });
+            configData.forEach(item => configMap[item.chiave] = item.valore);
             setAppConfig(configMap);
         }
     };
+    initDashboard();
+  }, [navigate]); 
 
-    checkSession();
-    fetchConfig();
-
-  }, [navigate, activeView]);
-
+  // Responsive Sidebar
   useEffect(() => {
     let timeoutId;
     const handleResize = () => {
@@ -107,6 +167,14 @@ export default function Dashboard() {
       clearTimeout(timeoutId);
     };
   }, []);
+
+  const getCurrentViewLabel = () => {
+      for (const group of menuGroups) {
+          const item = group.items.find(i => i.id === activeView);
+          if (item) return item.label;
+      }
+      return 'Dashboard';
+  };
 
   const handleLogoutClick = () => setShowLogoutConfirm(true);
 
@@ -125,24 +193,6 @@ export default function Dashboard() {
 
   if (!user) return <div className="flex items-center justify-center h-screen bg-accademia-dark text-gray-500">Caricamento profilo...</div>;
 
-  const menuItems = [];
-  if (user.ruolo === 'Admin') menuItems.push({ id: 'utenti', label: 'Gestione Utenti', icon: <UserCog size={18}/> });
-  if (user.ruolo !== 'Docente') menuItems.push({ id: 'docenti', label: 'Gestione Docenti', icon: <Users size={18}/> });
-  menuItems.push({ id: 'alunni', label: 'Gestione Alunni', icon: <GraduationCap size={18}/> });
-  if (user.ruolo !== 'Docente') menuItems.push({ id: 'tipi_lezioni', label: 'Configurazioni & Anni', icon: <Settings size={18}/> });
-  if (user.ruolo === 'Docente') menuItems.push({ id: 'calendario_personale', label: 'Il mio Calendario', icon: <Calendar size={18}/> });
-  else menuItems.push({ id: 'calendario_docenti', label: 'Calendario Docenti', icon: <Calendar size={18}/> });
-  menuItems.push({ id: 'registro_lezioni', label: 'Registro Lezioni', icon: <BookOpen size={18}/> });
-  if (user.ruolo !== 'Docente') {
-    menuItems.push({ id: 'pagamenti', label: 'Registro Pagamenti', icon: <DollarSign size={18}/> });
-    menuItems.push({ id: 'dettaglio_pagamenti', label: 'Riepilogo Pagamenti', icon: <TableProperties size={18}/> });
-    menuItems.push({ id: 'finanza', label: 'Riepilogo Finanziario', icon: <ClipboardList size={18}/> });
-  }
-  if (user.ruolo === 'Admin') {
-      menuItems.push({ id: 'configurazioni', label: 'Configurazioni App', icon: <Settings size={18} className="text-accademia-red"/> });
-      menuItems.push({ id: 'logs', label: 'Log Accessi', icon: <Shield size={18} /> });
-  }
-
   const renderContent = () => {
     switch (activeView) {
       case 'utenti': return <UtentiList />;
@@ -157,50 +207,102 @@ export default function Dashboard() {
       case 'finanza': return <RiepilogoFinanziario />;
       case 'configurazioni': return <ConfigurazioniApp />;
       case 'logs': return <AccessLogs />;
+      case 'gestione_menu': return <GestioneMenu />;     
+      case 'gestione_scuole': return <GestioneScuole />; 
       default: return <div className="p-10 text-center text-gray-500">Seleziona una voce dal menu</div>;
     }
   };
 
   return (
-    <div className="min-h-screen flex bg-accademia-dark text-accademia-text font-sans overflow-hidden">
+    <div className="h-screen flex bg-accademia-dark text-accademia-text font-sans overflow-hidden">
+      
+      {/* SIDEBAR */}
       <aside className={`bg-accademia-card border-r border-gray-800 flex flex-col shadow-2xl z-30 transition-all duration-300 ease-in-out absolute md:relative h-full ${isSidebarOpen ? 'w-64 translate-x-0' : 'w-0 -translate-x-full md:w-0 md:translate-x-0 overflow-hidden'}`}>
-        {/* ... Sidebar Content ... */}
-        <div className="p-6 border-b border-gray-800 flex justify-between items-center min-w-[16rem]">
-          <div className="flex items-center justify-center w-full pr-2"> <img src={LOGO_URL} alt="Accademia Logo" className="h-auto w-full max-w-[130px] object-contain" /></div>
+        
+        {/* LOGO AREA (FISSA) */}
+        <div className="p-6 border-b border-gray-800 flex justify-between items-center min-w-[16rem] h-28 shrink-0"> 
+          <div className="flex items-center justify-center w-full pr-2"> 
+              <img 
+                src={schoolInfo.logo} 
+                alt="Logo" 
+                className="h-auto w-auto max-w-[160px] max-h-[90px] object-contain transition-all duration-300" 
+              />
+          </div>
           <button onClick={() => setIsSidebarOpen(false)} className="md:hidden text-gray-400 hover:text-white"><ChevronLeft size={24} /></button>
         </div>
-        <nav className="flex-1 overflow-y-auto py-6 px-3 space-y-1 custom-scrollbar min-w-[16rem]">
-          <div className="text-xs font-bold text-gray-500 uppercase tracking-widest px-3 mb-2 mt-2">Menu</div>
-          {menuItems.map((item) => (
-            <button key={item.id} onClick={() => handleMenuClick(item.id)} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group ${activeView === item.id ? 'bg-accademia-red text-white shadow-md shadow-red-900/20' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
-              <span className={`transition-transform duration-200 ${activeView === item.id ? 'scale-110' : 'group-hover:scale-110'}`}>{item.icon}</span>
-              <span className="truncate">{item.label}</span>
-            </button>
+
+        {/* MENU LIST (SCROLLABILE) */}
+        <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-1 custom-scrollbar min-w-[16rem]">
+          {menuGroups.map((group, index) => (
+              <div key={group.moduleCode} className="mb-2">
+                  {/* SEPARATORE TRA MODULI */}
+                  {index > 0 && (
+                      <div className="my-3 border-t border-gray-800/60 mx-2"></div>
+                  )}
+
+                  {/* Voci del Gruppo */}
+                  <div className="space-y-1">
+                      {group.items.map((item) => (
+                        <button key={item.id} onClick={() => handleMenuClick(item.id)} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group ${activeView === item.id ? 'bg-accademia-red text-white shadow-md shadow-red-900/20' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
+                        <span className={`transition-transform duration-200 ${activeView === item.id ? 'scale-110' : 'group-hover:scale-110'}`}>{item.icon}</span>
+                        <span className="truncate">{item.label}</span>
+                        </button>
+                      ))}
+                  </div>
+              </div>
           ))}
         </nav>
-        <div className="p-4 border-t border-gray-800 min-w-[16rem] text-center">
+        
+        {/* FOOTER SIDEBAR (FISSO) */}
+        <div className="p-4 border-t border-gray-800 min-w-[16rem] text-center shrink-0">
             <div className="text-[10px] text-gray-600 font-mono uppercase tracking-widest">AA: {currentAcademicYear}</div>
         </div>
       </aside>
 
+      {/* MAIN CONTENT */}
       <main className="flex-1 flex flex-col h-screen overflow-hidden bg-accademia-dark relative w-full">
-        {/* ... Header Content ... */}
          <div className="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-gray-900 to-transparent pointer-events-none z-0"></div>
+        
+        {/* TOP BAR */}
         <header className="h-16 bg-accademia-card border-b border-gray-800 flex items-center justify-between px-4 z-20 shrink-0 gap-4 relative">
           <div className="flex items-center gap-4">
             <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-gray-400 hover:text-white p-2 hover:bg-gray-800 rounded-lg transition-colors"><Menu size={24} /></button>
             <div className="flex flex-col">
-                <div className="flex items-center gap-3 md:hidden"> <img src={LOGO_URL} alt="Logo" className="h-10 w-auto object-contain" /><span className="font-bold text-white text-lg leading-tight">Accademia</span></div>
+                <div className="flex items-center gap-3 md:hidden"> 
+                    <img src={schoolInfo.logo} alt="Logo" className="h-8 w-auto object-contain" />
+                    {/* Su mobile, se non è Admin, mostra il nome scuola */}
+                    {user.ruolo !== 'Admin' && (
+                        <span className="font-bold text-white text-sm leading-tight truncate max-w-[150px]">{schoolInfo.name}</span>
+                    )}
+                </div>
                 <div className="hidden md:flex items-center gap-4">
-                    {!isSidebarOpen && (<img src={LOGO_URL} alt="Logo" className="h-12 w-auto object-contain transition-all duration-300 animate-in fade-in slide-in-from-left-4" />)}
-                    <h1 className="text-xl font-light text-white capitalize tracking-tight border-l border-gray-700 pl-4 ml-2">{menuItems.find(i => i.id === activeView)?.label || 'Dashboard'}</h1>
+                    <h1 className="text-xl font-light text-white capitalize tracking-tight ml-2">{getCurrentViewLabel()}</h1>
                 </div>
             </div>
           </div>
-          <div className="hidden md:flex absolute left-1/2 top-1/2 transform -translate-x-1/2 -translate-y-1/2 items-center gap-3 bg-gray-900/50 px-4 py-1.5 rounded-full border border-gray-800/50 backdrop-blur-sm">
-              <div className="text-right leading-tight"><div className="text-sm font-medium text-white">{user.nome_esteso}</div><div className="text-[10px] text-accademia-red uppercase tracking-wider font-bold">{user.ruolo}</div></div>
-              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-accademia-red to-red-900 flex items-center justify-center text-white font-bold text-sm shadow-md border border-red-800/30">{user.nome_esteso.charAt(0).toUpperCase()}</div>
+          
+          <div className="hidden md:flex absolute left-1/2 top-1/2 transform -translate-x-1/2 -translate-y-1/2 items-center gap-4">
+              
+              {/* BADGE SCUOLA CENTRALE: VISIBILE SOLO SE NON SEI ADMIN */}
+              {user.ruolo !== 'Admin' && (
+                  <div className="flex items-center gap-2 px-3 py-1 bg-gray-900/80 rounded-full border border-gray-700/50 backdrop-blur-sm text-xs font-mono text-gray-300 shadow-sm animate-in fade-in">
+                     <Building size={12} className="text-accademia-red"/>
+                     <span className="truncate max-w-[200px]">{schoolInfo.name}</span>
+                  </div>
+              )}
+
+              {/* USER BADGE */}
+              <div className="flex items-center gap-3 bg-gray-900/50 px-4 py-1.5 rounded-full border border-gray-800/50 backdrop-blur-sm">
+                  <div className="text-right leading-tight">
+                      <div className="text-sm font-medium text-white">{user.nome_esteso}</div>
+                      <div className="text-[10px] text-accademia-red uppercase tracking-wider font-bold">{user.ruolo}</div>
+                  </div>
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-accademia-red to-red-900 flex items-center justify-center text-white font-bold text-sm shadow-md border border-red-800/30">
+                      {user.nome_esteso.charAt(0).toUpperCase()}
+                  </div>
+              </div>
           </div>
+
           <div className="flex items-center justify-end">
             <button 
               onClick={handleLogoutClick} 
@@ -225,7 +327,7 @@ export default function Dashboard() {
         </div>
       </main>
 
-      {/* --- MODALE CAMBIO PASSWORD (INPUT) --- */}
+      {/* MODALI (Password Change & Confirm) - Invariati */}
       {showPasswordChangeModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
           <div className="bg-accademia-card border border-red-500/50 w-full max-w-md rounded-xl shadow-2xl p-8 animate-in fade-in zoom-in-95">
@@ -246,9 +348,7 @@ export default function Dashboard() {
                 setUser(updatedUser);
                 localStorage.setItem('accademia_user', JSON.stringify(updatedUser));
                 
-                // 1. Chiudiamo il modale di input
                 setShowPasswordChangeModal(false);
-                // 2. Apriamo il dialog di successo (invece dell'alert)
                 setShowSuccessDialog(true);
               }} 
             />
@@ -256,7 +356,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* --- CONFIRM DIALOG LOGOUT --- */}
       <ConfirmDialog
         isOpen={showLogoutConfirm}
         type="warning"
@@ -269,21 +368,20 @@ export default function Dashboard() {
         onCancel={() => setShowLogoutConfirm(false)}
       />
 
-      {/* --- CONFIRM DIALOG SUCCESSO PASSWORD --- */}
       <ConfirmDialog
         isOpen={showSuccessDialog}
         type="success"
         title="Password Aggiornata"
         message="La tua password è stata modificata con successo. Benvenuto!"
         confirmText="Prosegui"
-        showCancel={false} // Nasconde il tasto Annulla
+        showCancel={false} 
         onConfirm={() => setShowSuccessDialog(false)}
       />
     </div>
   );
 }
 
-// Sub-Component Form
+// Sub-Component Form per Cambio Password
 function ChangePasswordForm({ onSuccess }) {
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');

@@ -13,53 +13,56 @@ export default function Login() {
 
   const LOGO_URL = "https://mqdpojtisighqjmyzdwz.supabase.co/storage/v1/object/public/images/logo-glow.png";
 
-  // Funzione Hash SHA-256
-  async function sha256(message) {
-    const msgBuffer = new TextEncoder().encode(message);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-  }
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
 
-const handleLogin = async (e) => {
-  e.preventDefault();
-  setLoading(true);
-  setError(null);
+    try {
+      // 1. Autenticazione Nativa Supabase
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        email: email,
+        password: password,
+      });
 
-  try {
-    // 1. Autenticazione Nativa Supabase
-    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-      email: email,
-      password: password,
-    });
+      if (authError) throw new Error("Credenziali non valide");
 
-    if (authError) throw new Error("Credenziali non valide");
+      // 2. Recuperiamo i dettagli del profilo
+      const { data: userProfile, error: profileError } = await supabase
+        .from('utenti')
+        .select('*')
+        .eq('id', authData.user.id)
+        .single();
 
-    // 2. Recuperiamo i dettagli del profilo (Ruolo, Nome, etc.) dalla tabella 'utenti'
-    const { data: userProfile, error: profileError } = await supabase
-      .from('utenti')
-      .select('*')
-      .eq('id', authData.user.id) // Usiamo l'ID restituito dall'Auth
-      .single();
+      if (profileError || !userProfile) throw new Error("Profilo utente non trovato.");
+      if (userProfile.stato !== 'Attivo') {
+          await supabase.auth.signOut();
+          throw new Error("Account non attivo o sospeso");
+      }
 
-    if (profileError || !userProfile) throw new Error("Profilo utente non trovato.");
-    if (userProfile.stato !== 'Attivo') {
-        await supabase.auth.signOut(); // Logout immediato se sospeso
-        throw new Error("Account non attivo o sospeso");
+      // 3. REGISTRAZIONE LOG ACCESSO (Nuova Logica)
+      // Nota: Assicurati che la tabella access_logs abbia le policy RLS aperte in scrittura per utenti autenticati
+      // o usa una funzione backend se necessario. Qui assumiamo inserimento diretto.
+      await supabase.from('access_logs').insert([
+        {
+          user_id: userProfile.id,
+          email: userProfile.email,
+          action: 'LOGIN',
+          timestamp: new Date().toISOString()
+        }
+      ]);
+
+      // 4. Salvataggio sessione locale e redirect
+      localStorage.setItem('accademia_user', JSON.stringify(userProfile));
+      navigate('/dashboard');
+
+    } catch (err) {
+      console.error("Login error:", err);
+      setError(err.message);
+    } finally {
+      setLoading(false);
     }
-
-    // 3. Salviamo nel localStorage (opzionale, Supabase gestisce la sessione, 
-    // ma il tuo codice Dashboard usa 'accademia_user', quindi lo manteniamo per compatibilità)
-    localStorage.setItem('accademia_user', JSON.stringify(userProfile));
-    
-    navigate('/dashboard');
-
-  } catch (err) {
-    setError(err.message);
-  } finally {
-    setLoading(false);
-  }
-};
+  };
 
   const handlePasswordReset = async (e) => {
     e.preventDefault();
@@ -84,9 +87,8 @@ const handleLogin = async (e) => {
       const resetLink = `${window.location.origin}/reset-password?token=${token}`;
       console.log("--- LINK DI RECUPERO (SIMULAZIONE MAIL) ---");
       console.log(resetLink);
-      console.log("-------------------------------------------");
-
-      setSuccessMsg("Istruzioni inviate! (Controlla la Console del browser per il link di test)");
+      
+      setSuccessMsg("Istruzioni inviate! (Controlla la Console per il link di test)");
       
     } catch (err) {
       setError(err.message);
@@ -128,7 +130,6 @@ const handleLogin = async (e) => {
           </div>
         )}
 
-        {/* LOGIN FORM */}
         {view === 'login' && (
           <form onSubmit={handleLogin} className="space-y-5">
             <div>
@@ -182,7 +183,6 @@ const handleLogin = async (e) => {
           </form>
         )}
 
-        {/* FORGOT PASSWORD FORM */}
         {view === 'forgot' && (
           <form onSubmit={handlePasswordReset} className="space-y-5">
             <div className="text-center text-sm text-gray-400 mb-4 px-4">

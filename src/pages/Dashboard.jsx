@@ -221,7 +221,7 @@ export default function Dashboard() {
       
       case 'pagamenti': return <Pagamenti user={user} currentGlobalYear={currentAcademicYear} />;
       
-      case 'dettaglio_pagamenti': return <DettaglioPagamenti />;
+      case 'dettaglio_pagamenti': return <DettaglioPagamenti user={user} />;
       case 'finanza': return <RiepilogoFinanziario />;
       case 'configurazioni': return <ConfigurazioniApp />;
       case 'logs': return <AccessLogs />;

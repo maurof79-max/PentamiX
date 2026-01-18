@@ -3,8 +3,8 @@ import { createPortal } from 'react-dom';
 import { supabase } from '../supabaseClient';
 import { 
     Edit2, Trash2, Plus, X, Search, Smartphone, Mail, GraduationCap, 
-    Filter, ArrowUpDown, ArrowUp, ArrowDown, MapPin, UserCheck, FileText, 
-    Building, Check, UserPlus, Users, User, Music
+    Filter, ArrowUpDown, ArrowUp, ArrowDown, MapPin, 
+    Building, Check, UserPlus, Users, User, Lock, Eye, Loader2
 } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
 
@@ -35,21 +35,20 @@ export default function AlunniList({ userRole }) {
         if (session) {
             const { data: profile } = await supabase.from('utenti').select('*').eq('id', session.user.id).single();
             setCurrentUser(profile);
+            await Promise.all([fetchDocenti(), fetchAlunni(profile)]);
         }
 
         if (userRole === 'Admin') {
             const { data: sData } = await supabase.from('scuole').select('id, nome').order('nome');
             setScuole(sData || []);
         }
-
-        await Promise.all([fetchDocenti(), fetchAlunni()]);
+        
         setLoading(false);
     };
     init();
   }, [userRole]);
 
   const fetchDocenti = async () => {
-      // Importante: selezioniamo 'strumento'
       const { data } = await supabase
         .from('docenti')
         .select('id, nome, cognome, strumento')
@@ -58,14 +57,35 @@ export default function AlunniList({ userRole }) {
       setDocenti(data || []);
   };
 
-  const fetchAlunni = async () => {
-    const { data, error } = await supabase
+  const fetchAlunni = async (profile) => {
+    // 1. Fetch base (RLS filtra per scuola)
+    let query = supabase
       .from('alunni')
-      .select('*, scuole(nome)')
+      .select(`
+        *, 
+        scuole(nome),
+        associazioni (
+            docente_id,
+            docenti (id, nome, cognome, strumento)
+        )
+      `)
       .order('cognome');
-    
-    if (error) console.error("Errore fetch alunni:", error);
-    else setAlunni(data || []);
+
+    const { data: allAlunni, error } = await query;
+    if (error) {
+        console.error("Errore fetch alunni:", error);
+        return;
+    }
+
+    // 2. FILTRO LATO CLIENT PER I DOCENTI
+    if (profile?.ruolo === 'Docente' && profile?.id_collegato) {
+        const myAlunni = allAlunni.filter(a => 
+            a.associazioni && a.associazioni.some(assoc => assoc.docente_id === profile.id_collegato)
+        );
+        setAlunni(myAlunni);
+    } else {
+        setAlunni(allAlunni || []);
+    }
   };
 
   // --- LOGICA ORDINAMENTO ---
@@ -123,7 +143,7 @@ export default function AlunniList({ userRole }) {
             if (error) {
                 setDialogConfig({ isOpen: true, type: 'error', title: 'Errore', message: error.message });
             } else {
-                fetchAlunni();
+                fetchAlunni(currentUser);
                 setConfirmDialog({ ...confirmDialog, isOpen: false });
             }
         }
@@ -177,7 +197,6 @@ export default function AlunniList({ userRole }) {
         </div>
       </div>
 
-      {/* TABELLA DATI COMPATTA */}
       <div className="flex-1 overflow-auto custom-scrollbar">
         <table className="w-full text-left text-sm whitespace-nowrap">
             <thead className="bg-gray-900/50 text-gray-400 uppercase text-xs sticky top-0 backdrop-blur-md z-10">
@@ -186,9 +205,8 @@ export default function AlunniList({ userRole }) {
                         <div className="flex items-center">Alunno {getSortIcon('cognome')}</div>
                     </th>
                     <th className="px-6 py-4 font-semibold">Contatti</th>
-                    
+                    <th className="px-6 py-4 font-semibold">Docenti</th>
                     {userRole === 'Admin' && <th className="px-6 py-4 font-semibold">Scuola</th>}
-                    
                     <th className="px-6 py-4 font-semibold text-center cursor-pointer hover:text-white group" onClick={() => handleSort('stato')}>
                         <div className="flex items-center justify-center">Stato {getSortIcon('stato')}</div>
                     </th>
@@ -212,13 +230,25 @@ export default function AlunniList({ userRole }) {
                             {alunno.cellulare && <div className="flex items-center gap-2 text-xs mt-1"><Smartphone size={12}/> {alunno.cellulare}</div>}
                             {!alunno.email && !alunno.cellulare && <span className="text-gray-600 italic">-</span>}
                         </td>
-                        
+                        <td className="px-6 py-4">
+                            {alunno.associazioni && alunno.associazioni.length > 0 ? (
+                                <div className="flex flex-col gap-1">
+                                    {alunno.associazioni.map((a, idx) => (
+                                        <div key={idx} className="flex items-center gap-1 text-xs text-blue-300 bg-blue-900/20 px-2 py-0.5 rounded-md w-fit border border-blue-900/30">
+                                            <User size={10}/>
+                                            {a.docenti?.cognome} {a.docenti?.nome}
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <span className="text-gray-600 text-xs italic">Nessun docente</span>
+                            )}
+                        </td>
                         {userRole === 'Admin' && (
                             <td className="px-6 py-4 text-accademia-red text-xs font-bold uppercase">
                                 {alunno.scuole?.nome || '-'}
                             </td>
                         )}
-
                         <td className="px-6 py-4 text-center">
                             <span className={`px-2 py-1 rounded-full text-[10px] border ${
                                 alunno.stato === 'Attivo' 
@@ -236,13 +266,6 @@ export default function AlunniList({ userRole }) {
                         </td>
                     </tr>
                 ))}
-                {processedAlunni.length === 0 && (
-                    <tr>
-                        <td colSpan={userRole === 'Admin' ? 5 : 4} className="px-6 py-10 text-center text-gray-500 italic">
-                            Nessun alunno trovato.
-                        </td>
-                    </tr>
-                )}
             </tbody>
         </table>
       </div>
@@ -257,7 +280,7 @@ export default function AlunniList({ userRole }) {
             onClose={() => setShowModal(false)}
             onSave={(msg) => { 
                 setShowModal(false); 
-                fetchAlunni(); 
+                fetchAlunni(currentUser); 
                 setDialogConfig({ isOpen: true, type: 'success', title: 'Completato', message: msg });
             }}
         />
@@ -284,7 +307,6 @@ export default function AlunniList({ userRole }) {
   );
 }
 
-// --- MODALE AVANZATO ---
 function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClose, onSave }) {
     const isEdit = !!alunno;
     const [activeTab, setActiveTab] = useState(isEdit ? 'form' : 'search');
@@ -292,8 +314,6 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
     const [searchResults, setSearchResults] = useState([]);
     const [searching, setSearching] = useState(false);
     const [searchError, setSearchError] = useState(null);
-    
-    // Stato Filtro Docenti nel Modale
     const [docenteFilter, setDocenteFilter] = useState('');
 
     const [formData, setFormData] = useState({
@@ -319,47 +339,83 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
     const [loading, setLoading] = useState(false);
 
     useEffect(() => {
-        if (!isEdit && userRole !== 'Admin' && currentUser?.school_id) {
-            setFormData(prev => ({ ...prev, school_id: currentUser.school_id }));
+        if (!isEdit && userRole !== 'Admin') {
+            const updates = {};
+            if (currentUser?.school_id) updates.school_id = currentUser.school_id;
+            if (userRole === 'Docente' && currentUser?.id_collegato) {
+                updates.selectedDocenti = [currentUser.id_collegato];
+            }
+            setFormData(prev => ({ ...prev, ...updates }));
         }
 
         if (isEdit && alunno.id) {
             const fetchAssociazioni = async () => {
-                const { data } = await supabase
-                    .from('associazioni')
-                    .select('docente_id')
-                    .eq('alunno_id', alunno.id);
+                const { data } = await supabase.from('associazioni').select('docente_id').eq('alunno_id', alunno.id);
                 if (data) {
-                    setFormData(prev => ({ 
-                        ...prev, 
-                        selectedDocenti: data.map(item => item.docente_id) 
-                    }));
+                    setFormData(prev => ({ ...prev, selectedDocenti: data.map(item => item.docente_id) }));
                 }
             };
             fetchAssociazioni();
         }
     }, [isEdit, userRole, currentUser, alunno]);
 
-    const handleSearch = async () => {
-        if (searchQuery.length < 2) { setSearchError("Inserisci almeno 2 caratteri."); return; }
-        setSearching(true); setSearchError(null);
-        try {
-            const terms = searchQuery.trim().split(/\s+/);
-            let query = supabase.from('alunni').select('*');
-            if (terms.length === 1) {
-                 const term = terms[0]; query = query.or(`nome.ilike.%${term}%,cognome.ilike.%${term}%`);
-            } else {
-                 const t1 = terms[0]; const t2 = terms[1]; query = query.or(`and(nome.ilike.%${t1}%,cognome.ilike.%${t2}%),and(nome.ilike.%${t2}%,cognome.ilike.%${t1}%)`);
+    // --- LOGICA DI RICERCA LIVE (DEBOUNCE) ---
+    useEffect(() => {
+        // Funzione di ricerca effettiva
+        const performSearch = async () => {
+            if (searchQuery.length < 2) {
+                setSearchResults([]);
+                setSearchError(null);
+                setSearching(false);
+                return;
             }
-            const { data, error } = await query.limit(10);
-            if (error) throw error;
-            setSearchResults(data || []);
-        } catch (err) { setSearchError(err.message); } finally { setSearching(false); }
-    };
+
+            setSearching(true); 
+            setSearchError(null);
+            
+            try {
+                const terms = searchQuery.trim().split(/\s+/);
+                let query = supabase.from('alunni').select('*');
+                
+                if (currentUser?.school_id) {
+                    query = query.eq('school_id', currentUser.school_id);
+                }
+
+                if (terms.length === 1) {
+                    const term = terms[0]; 
+                    query = query.or(`nome.ilike.%${term}%,cognome.ilike.%${term}%`);
+                } else {
+                    const t1 = terms[0]; const t2 = terms[1]; 
+                    query = query.or(`and(nome.ilike.%${t1}%,cognome.ilike.%${t2}%),and(nome.ilike.%${t2}%,cognome.ilike.%${t1}%)`);
+                }
+                
+                const { data, error } = await query.limit(10);
+                if (error) throw error;
+                setSearchResults(data || []);
+            } catch (err) { 
+                setSearchError(err.message); 
+            } finally { 
+                setSearching(false); 
+            }
+        };
+
+        // Imposta il timer per il debounce (500ms)
+        const timeoutId = setTimeout(() => {
+            performSearch();
+        }, 500);
+
+        // Pulisce il timer se l'utente digita ancora
+        return () => clearTimeout(timeoutId);
+
+    }, [searchQuery, currentUser]);
 
     const handleLoadForEdit = async (alunnoTrovato) => {
         const { data: assocData } = await supabase.from('associazioni').select('docente_id').eq('alunno_id', alunnoTrovato.id);
-        const currentDocenti = assocData ? assocData.map(d => d.docente_id) : [];
+        let currentDocenti = assocData ? assocData.map(d => d.docente_id) : [];
+
+        if (userRole === 'Docente' && currentUser?.id_collegato && !currentDocenti.includes(currentUser.id_collegato)) {
+            currentDocenti.push(currentUser.id_collegato);
+        }
 
         setFormData({
             ...alunnoTrovato,
@@ -374,6 +430,7 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
     };
 
     const toggleDocente = (docId) => {
+        if (userRole === 'Docente') return; 
         setFormData(prev => {
             const isSelected = prev.selectedDocenti.includes(docId);
             if (isSelected) return { ...prev, selectedDocenti: prev.selectedDocenti.filter(id => id !== docId) };
@@ -381,7 +438,6 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
         });
     };
 
-    // Filtra docenti per nome/cognome/strumento
     const filteredDocentiList = docentiList.filter(d => 
         `${d.cognome} ${d.nome} ${d.strumento || ''}`.toLowerCase().includes(docenteFilter.toLowerCase())
     );
@@ -414,8 +470,13 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
 
             await supabase.from('associazioni').delete().eq('alunno_id', alunnoId);
             
-            if (formData.selectedDocenti.length > 0) {
-                const assocPayload = formData.selectedDocenti.map(docId => ({
+            let finalSelectedDocenti = [...formData.selectedDocenti];
+            if (userRole === 'Docente' && currentUser?.id_collegato && !finalSelectedDocenti.includes(currentUser.id_collegato)) {
+                finalSelectedDocenti.push(currentUser.id_collegato);
+            }
+
+            if (finalSelectedDocenti.length > 0) {
+                const assocPayload = finalSelectedDocenti.map(docId => ({
                     alunno_id: alunnoId,
                     docente_id: docId
                 }));
@@ -423,13 +484,16 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
                 if (assocError) throw assocError;
             }
 
-            onSave(formData.id ? "Alunno aggiornato." : "Nuovo alunno creato.");
+            onSave(formData.id ? "Alunno aggiornato." : "Nuovo alunno creato e associato.");
         } catch (err) {
             alert("Errore: " + err.message);
         } finally {
             setLoading(false);
         }
     };
+
+    const showDocentiSection = userRole !== 'Docente' || isEdit;
+    const isDocentiReadOnly = userRole === 'Docente';
 
     return createPortal(
         <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
@@ -457,11 +521,25 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
 
                 {activeTab === 'search' && (
                     <div className="space-y-4">
-                        <div className="flex gap-2">
-                            <input type="text" placeholder="Cerca per Nome Cognome..." className="flex-1 bg-accademia-input border border-gray-700 rounded p-3 text-white focus:border-accademia-red focus:outline-none" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSearch()}/>
-                            <button onClick={handleSearch} disabled={searching} className="bg-gray-700 hover:bg-gray-600 text-white px-4 rounded-lg font-bold">{searching ? '...' : 'Cerca'}</button>
+                        {/* INPUT RICERCA LIVE MIGLIORATO */}
+                        <div className="relative">
+                            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"/>
+                            <input 
+                                type="text" 
+                                placeholder="Inizia a digitare Nome o Cognome..." 
+                                className="w-full bg-accademia-input border border-gray-700 rounded-lg p-3 pl-10 pr-12 text-white focus:border-accademia-red focus:outline-none" 
+                                value={searchQuery} 
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                            />
+                            {searching && (
+                                <div className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 animate-pulse flex items-center gap-1">
+                                    <Loader2 size={16} className="animate-spin" />
+                                </div>
+                            )}
                         </div>
+                        
                         {searchError && <p className="text-red-400 text-sm">{searchError}</p>}
+                        
                         <div className="space-y-2 mt-4 max-h-60 overflow-y-auto custom-scrollbar">
                             {searchResults.length > 0 ? (
                                 searchResults.map(res => (
@@ -470,11 +548,12 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
                                         <button onClick={() => handleLoadForEdit(res)} className="px-3 py-1.5 bg-blue-900/30 hover:bg-blue-900/50 text-blue-300 border border-blue-800 text-xs font-bold rounded flex items-center gap-1"><Edit2 size={12}/> Gestisci</button>
                                     </div>
                                 ))
-                            ) : ( searchQuery && !searching && <p className="text-center text-gray-500 py-4">Nessun alunno trovato.</p> )}
+                            ) : ( searchQuery.length >= 2 && !searching && <p className="text-center text-gray-500 py-4">Nessun alunno trovato.</p> )}
                         </div>
                     </div>
                 )}
 
+                {/* --- TAB FORM (CREAZIONE/MODIFICA) --- */}
                 {activeTab === 'form' && (
                     <form onSubmit={handleSubmit} className="space-y-6">
                         
@@ -534,67 +613,71 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
                             </div>
                         </div>
 
-                        {/* SEZIONE GESTIONE DIDATTICA (DOCENTI) - MODIFICATA */}
-                        <div className="pt-6 border-t border-gray-800">
-                            <div className="flex justify-between items-center mb-4">
-                                <h4 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
-                                    <Users size={16} className="text-accademia-red"/> Gestione Didattica: Docenti Associati
-                                </h4>
-                                {/* Ricerca rapida docenti */}
-                                <div className="relative">
-                                    <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500"/>
-                                    <input 
-                                        type="text" 
-                                        placeholder="Cerca docente o strumento..." 
-                                        value={docenteFilter}
-                                        onChange={(e) => setDocenteFilter(e.target.value)}
-                                        className="bg-gray-800 border border-gray-700 rounded-md py-1 pl-8 pr-2 text-xs text-white focus:border-accademia-red focus:outline-none w-56"
-                                    />
+                        {showDocentiSection && (
+                            <div className="pt-6 border-t border-gray-800">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h4 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                                        {isDocentiReadOnly ? <Eye size={16} className="text-gray-400"/> : <Users size={16} className="text-accademia-red"/>}
+                                        {isDocentiReadOnly ? 'Docenti Associati (Sola Lettura)' : 'Gestione Didattica: Docenti Associati'}
+                                    </h4>
+                                    {!isDocentiReadOnly && (
+                                        <div className="relative">
+                                            <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500"/>
+                                            <input 
+                                                type="text" 
+                                                placeholder="Cerca docente o strumento..." 
+                                                value={docenteFilter}
+                                                onChange={(e) => setDocenteFilter(e.target.value)}
+                                                className="bg-gray-800 border border-gray-700 rounded-md py-1 pl-8 pr-2 text-xs text-white focus:border-accademia-red focus:outline-none w-56"
+                                            />
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="bg-gray-900/30 border border-gray-700 rounded-xl p-4">
+                                    {docentiList.length === 0 ? (
+                                        <div className="text-center text-gray-500 py-4 text-xs">Nessun docente attivo in questa scuola.</div>
+                                    ) : (
+                                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 max-h-48 overflow-y-auto custom-scrollbar">
+                                            {filteredDocentiList.map(doc => {
+                                                const isSelected = formData.selectedDocenti.includes(doc.id);
+                                                const isLocked = isDocentiReadOnly;
+                                                return (
+                                                    <div 
+                                                        key={doc.id}
+                                                        onClick={() => toggleDocente(doc.id)}
+                                                        className={`rounded-lg p-2 border transition-all flex items-center gap-3 select-none ${
+                                                            isSelected 
+                                                            ? (isLocked ? 'bg-gray-800 border-gray-600' : 'bg-accademia-red/20 border-accademia-red shadow-[0_0_10px_rgba(220,38,38,0.2)] cursor-pointer') 
+                                                            : (isLocked ? 'bg-gray-900/50 border-gray-800 opacity-50' : 'bg-gray-800 border-gray-700 hover:border-gray-500 opacity-80 hover:opacity-100 cursor-pointer')
+                                                        }`}
+                                                    >
+                                                        <div className={`w-5 h-5 rounded flex items-center justify-center border transition-colors shrink-0 ${
+                                                            isSelected 
+                                                            ? (isLocked ? 'bg-gray-700 border-gray-600 text-gray-300' : 'bg-accademia-red border-accademia-red text-white')
+                                                            : 'bg-gray-900 border-gray-600 text-transparent'
+                                                        }`}>
+                                                            {isLocked && isSelected ? <Lock size={10} /> : <Check size={14} strokeWidth={4}/>}
+                                                        </div>
+                                                        <div className="flex flex-col min-w-0">
+                                                            <span className={`text-xs font-bold truncate ${isSelected ? 'text-white' : 'text-gray-500'}`}>
+                                                                {doc.cognome} {doc.nome}
+                                                            </span>
+                                                            <span className={`text-[10px] truncate ${isSelected ? (isLocked ? 'text-gray-400' : 'text-red-200') : 'text-gray-600'}`}>
+                                                                {doc.strumento || '-'}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                )
+                                            })}
+                                            {filteredDocentiList.length === 0 && (
+                                                <div className="col-span-full text-center text-gray-500 text-xs py-2">Nessun docente trovato con questo filtro.</div>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                             </div>
-
-                            <div className="bg-gray-900/30 border border-gray-700 rounded-xl p-4">
-                                {docentiList.length === 0 ? (
-                                    <div className="text-center text-gray-500 py-4 text-xs">Nessun docente attivo in questa scuola.</div>
-                                ) : (
-                                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 max-h-48 overflow-y-auto custom-scrollbar">
-                                        {filteredDocentiList.map(doc => {
-                                            const isSelected = formData.selectedDocenti.includes(doc.id);
-                                            return (
-                                                <div 
-                                                    key={doc.id}
-                                                    onClick={() => toggleDocente(doc.id)}
-                                                    className={`cursor-pointer rounded-lg p-2 border transition-all flex items-center gap-3 select-none ${
-                                                        isSelected 
-                                                        ? 'bg-accademia-red/20 border-accademia-red shadow-[0_0_10px_rgba(220,38,38,0.2)]' 
-                                                        : 'bg-gray-800 border-gray-700 hover:border-gray-500 opacity-80 hover:opacity-100'
-                                                    }`}
-                                                >
-                                                    <div className={`w-5 h-5 rounded flex items-center justify-center border transition-colors shrink-0 ${
-                                                        isSelected 
-                                                        ? 'bg-accademia-red border-accademia-red text-white' 
-                                                        : 'bg-gray-900 border-gray-600 text-transparent'
-                                                    }`}>
-                                                        <Check size={14} strokeWidth={4}/>
-                                                    </div>
-                                                    <div className="flex flex-col min-w-0">
-                                                        <span className={`text-xs font-bold truncate ${isSelected ? 'text-white' : 'text-gray-300'}`}>
-                                                            {doc.cognome} {doc.nome}
-                                                        </span>
-                                                        <span className={`text-[10px] truncate ${isSelected ? 'text-red-200' : 'text-gray-500'}`}>
-                                                            {doc.strumento || '-'}
-                                                        </span>
-                                                    </div>
-                                                </div>
-                                            )
-                                        })}
-                                        {filteredDocentiList.length === 0 && (
-                                            <div className="col-span-full text-center text-gray-500 text-xs py-2">Nessun docente trovato con questo filtro.</div>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-                        </div>
+                        )}
 
                         <div className="pt-4 border-t border-gray-800 flex justify-end gap-3">
                             <button type="button" onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white transition-colors">Annulla</button>

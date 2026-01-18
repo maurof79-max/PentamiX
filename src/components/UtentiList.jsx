@@ -2,7 +2,10 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { createClient } from '@supabase/supabase-js'; 
 import { supabase } from '../supabaseClient';
-import { X, Edit2, Trash2, Link as LinkIcon, UserPlus, Building } from 'lucide-react';
+import { 
+    X, Edit2, Trash2, Link as LinkIcon, UserPlus, Building, 
+    Search, Filter 
+} from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
 
 export default function UtentiList() {
@@ -13,8 +16,12 @@ export default function UtentiList() {
   const [showModal, setShowModal] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
   
-  // Dati dell'utente loggato (chi sta facendo l'azione?)
+  // Dati dell'utente loggato
   const [currentUser, setCurrentUser] = useState(null);
+
+  // --- STATI PER FILTRI E RICERCA ---
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterScuola, setFilterScuola] = useState('');
 
   const [successDialog, setSuccessDialog] = useState({ 
     isOpen: false, title: '', message: '' 
@@ -46,11 +53,10 @@ export default function UtentiList() {
   }, []);
 
   const fetchUtenti = async () => {
-    // La RLS filtrerà già gli utenti in base alla scuola se non sei Admin.
-    // Se sei Admin, vedi tutti.
+    // MODIFICA: Aggiunto 'cognome' nella select della relazione docenti
     const { data: userData, error } = await supabase
       .from('utenti')
-      .select('*, docenti(nome), scuole(nome)') // Join anche con scuole
+      .select('*, docenti(nome, cognome), scuole(nome)') 
       .order('created_at', { ascending: false });
     
     if (error) console.error("Errore fetch utenti:", error);
@@ -58,9 +64,25 @@ export default function UtentiList() {
   };
 
   const fetchDocenti = async () => {
-    const { data } = await supabase.from('docenti').select('id, nome').order('nome');
+    const { data } = await supabase
+        .from('docenti')
+        .select('id, nome, cognome, strumento, school_id')
+        .order('cognome');
     setDocenti(data || []);
   };
+
+  // --- LOGICA FILTRAGGIO UTENTI ---
+  const filteredUtenti = utenti.filter(u => {
+      // 1. Filtro Testo (Nome o Email)
+      const searchLower = searchTerm.toLowerCase();
+      const matchText = u.nome_esteso?.toLowerCase().includes(searchLower) || 
+                        u.email?.toLowerCase().includes(searchLower);
+      
+      // 2. Filtro Scuola (Solo se selezionato e se disponibile school_id)
+      const matchSchool = filterScuola ? u.school_id === filterScuola : true;
+
+      return matchText && matchSchool;
+  });
 
   const handleOpenModal = (user = null) => {
     setEditingUser(user);
@@ -76,7 +98,7 @@ export default function UtentiList() {
 
   return (
     <div className="p-0 relative">
-      <div className="p-4 border-b border-gray-800 flex justify-between items-center">
+      <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-900/20">
         <h3 className="text-lg font-light text-white">Amministrazione Accessi</h3>
         <button 
           onClick={() => handleOpenModal(null)}
@@ -84,6 +106,38 @@ export default function UtentiList() {
         >
           <UserPlus size={16} /> Nuovo Utente
         </button>
+      </div>
+
+      {/* --- BARRA DI RICERCA E FILTRI --- */}
+      <div className="p-4 border-b border-gray-800 bg-gray-900/10 flex flex-col md:flex-row gap-4">
+        {/* Ricerca Testuale */}
+        <div className="relative flex-1">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"/>
+            <input 
+                type="text" 
+                placeholder="Cerca utente per nome o email..." 
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full bg-accademia-input border border-gray-700 text-white rounded-md pl-10 pr-4 py-2 text-sm focus:border-accademia-red focus:outline-none"
+            />
+        </div>
+
+        {/* Filtro Scuola (Solo Admin) */}
+        {currentUser?.ruolo === 'Admin' && (
+            <div className="relative w-full md:w-64">
+                <Filter size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"/>
+                <select
+                    value={filterScuola}
+                    onChange={(e) => setFilterScuola(e.target.value)}
+                    className="w-full bg-accademia-input border border-gray-700 text-white rounded-md pl-10 pr-8 py-2 text-sm appearance-none focus:border-accademia-red focus:outline-none cursor-pointer"
+                >
+                    <option value="">Tutte le Scuole</option>
+                    {scuole.map(s => (
+                        <option key={s.id} value={s.id}>{s.nome}</option>
+                    ))}
+                </select>
+            </div>
+        )}
       </div>
 
       <div className="overflow-x-auto custom-scrollbar pb-10">
@@ -99,7 +153,7 @@ export default function UtentiList() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800">
-            {utenti.map((u, index) => (
+            {filteredUtenti.map((u, index) => (
               <tr key={u.id || index} className="hover:bg-gray-800/30 transition-colors">
                 <td className="px-6 py-4 font-medium text-white">{u.nome_esteso}</td>
                 <td className="px-6 py-4 font-mono text-gray-400 text-xs">{u.email}</td>
@@ -126,7 +180,8 @@ export default function UtentiList() {
                 <td className="px-6 py-4 text-gray-300">
                   {u.docenti ? (
                     <div className="flex items-center gap-1 text-accademia-red">
-                      <LinkIcon size={12} /> {u.docenti.nome}
+                      {/* MODIFICA: Mostra Cognome Nome */}
+                      <LinkIcon size={12} /> {u.docenti.cognome} {u.docenti.nome}
                     </div>
                   ) : <span className="text-gray-600">-</span>}
                 </td>
@@ -136,6 +191,13 @@ export default function UtentiList() {
                 </td>
               </tr>
             ))}
+            {filteredUtenti.length === 0 && (
+                <tr>
+                    <td colSpan={6} className="px-6 py-8 text-center text-gray-500 italic">
+                        Nessun utente trovato con i filtri correnti.
+                    </td>
+                </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -144,8 +206,8 @@ export default function UtentiList() {
         <ModalUtente 
           user={editingUser} 
           docenti={docenti}
-          scuole={scuole}           // Passiamo la lista scuole
-          currentUser={currentUser} // Passiamo chi sta operando
+          scuole={scuole}           
+          currentUser={currentUser} 
           onClose={() => setShowModal(false)}
           onSave={(msgTitle, msgBody) => { 
             setShowModal(false); 
@@ -178,7 +240,7 @@ function ModalUtente({ user, docenti, scuole, currentUser, onClose, onSave }) {
     ruolo: user?.ruolo || 'Docente',
     id_collegato: user?.id_collegato || '',
     password: '',
-    school_id: user?.school_id || '' // Nuovo campo per la scuola
+    school_id: user?.school_id || '' 
   });
   
   const [loading, setLoading] = useState(false);
@@ -190,12 +252,17 @@ function ModalUtente({ user, docenti, scuole, currentUser, onClose, onSave }) {
     }
   }, [currentUser, isEdit]);
 
+  // Filtriamo i docenti in base alla scuola selezionata
+  const filteredDocenti = docenti.filter(d => {
+    if (!formData.school_id) return false; 
+    return d.school_id === formData.school_id;
+  });
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
 
     try {
-      // Validazione Scuola Obbligatoria
       if (!formData.school_id) throw new Error("Devi selezionare una scuola di appartenenza.");
 
       if (isEdit) {
@@ -206,7 +273,7 @@ function ModalUtente({ user, docenti, scuole, currentUser, onClose, onSave }) {
             nome_esteso: formData.nome_esteso,
             ruolo: formData.ruolo,
             id_collegato: formData.ruolo === 'Docente' ? formData.id_collegato : null,
-            school_id: formData.school_id // Admin può spostare utente
+            school_id: formData.school_id 
           })
           .eq('id', user.id);
 
@@ -217,7 +284,6 @@ function ModalUtente({ user, docenti, scuole, currentUser, onClose, onSave }) {
         // CREATE
         if (!formData.password || formData.password.length < 6) throw new Error("La password deve essere di almeno 6 caratteri.");
 
-        // Client Temporaneo
         const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
         const supabaseKey = import.meta.env.VITE_SUPABASE_KEY;
         const memoryStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
@@ -235,7 +301,7 @@ function ModalUtente({ user, docenti, scuole, currentUser, onClose, onSave }) {
         if (authError) throw authError;
         if (!authData.user) throw new Error("Errore creazione Auth.");
 
-        // 2. Insert Profilo con school_id
+        // 2. Insert Profilo
         const { error: profileError } = await supabase
           .from('utenti')
           .insert([{
@@ -246,7 +312,7 @@ function ModalUtente({ user, docenti, scuole, currentUser, onClose, onSave }) {
             stato: 'Attivo',
             id_collegato: formData.ruolo === 'Docente' ? formData.id_collegato : null,
             must_change_password: true,
-            school_id: formData.school_id // <--- FONDAMENTALE
+            school_id: formData.school_id 
           }]);
 
         if (profileError) throw new Error("Utente Auth creato, ma errore DB Profilo: " + profileError.message);
@@ -320,9 +386,20 @@ function ModalUtente({ user, docenti, scuole, currentUser, onClose, onSave }) {
           {formData.ruolo === 'Docente' && (
             <div className="p-3 border border-red-900/30 bg-red-900/10 rounded-lg">
               <label className="block text-xs font-bold text-accademia-red mb-1 uppercase">Associa ad Anagrafica</label>
-              <select value={formData.id_collegato} onChange={e => setFormData({...formData, id_collegato: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded-lg p-2.5 text-white focus:border-accademia-red focus:outline-none">
-                <option value="">-- Seleziona Docente --</option>
-                {docenti.map(d => <option key={d.id} value={d.id}>{d.nome}</option>)}
+              <select 
+                value={formData.id_collegato} 
+                onChange={e => setFormData({...formData, id_collegato: e.target.value})} 
+                className="w-full bg-accademia-input border border-gray-700 rounded-lg p-2.5 text-white focus:border-accademia-red focus:outline-none"
+                disabled={!formData.school_id} 
+              >
+                <option value="">
+                    {formData.school_id ? "-- Seleziona Docente --" : "-- Seleziona prima una Scuola --"}
+                </option>
+                {filteredDocenti.map(d => (
+                    <option key={d.id} value={d.id}>
+                        {d.cognome} {d.nome} ({d.strumento || 'N.D.'})
+                    </option>
+                ))}
               </select>
             </div>
           )}

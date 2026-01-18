@@ -4,7 +4,7 @@ import { supabase } from '../supabaseClient';
 import { 
   LogOut, Calendar, Users, DollarSign, BookOpen, Settings, 
   UserCog, GraduationCap, ClipboardList, TableProperties, Menu, ChevronLeft,
-  Shield, LayoutDashboard, Building 
+  Shield, LayoutDashboard, Building, Archive 
 } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
 
@@ -22,7 +22,8 @@ const ICON_MAP = {
     'SettingsRed': <Settings size={18} className="text-accademia-red" />,
     'Shield': <Shield size={18} />,
     'LayoutDashboard': <LayoutDashboard size={18} />, 
-    'Building': <Building size={18} /> 
+    'Building': <Building size={18} />,
+    'Archive': <Archive size={18} /> // Aggiunta icona Archive per Tariffe
 };
 
 // COMPONENTS (Lazy Loading)
@@ -31,7 +32,6 @@ const Calendario = lazy(() => import('../components/Calendario'));
 const RegistroLezioni = lazy(() => import('../components/RegistroLezioni'));
 const Pagamenti = lazy(() => import('../components/Pagamenti'));
 const AlunniList = lazy(() => import('../components/AlunniList'));
-const TipiLezioni = lazy(() => import('../components/TipiLezioni'));
 const UtentiList = lazy(() => import('../components/UtentiList'));
 const RiepilogoFinanziario = lazy(() => import('../components/RiepilogoFinanziario'));
 const DettaglioPagamenti = lazy(() => import('../components/DettaglioPagamenti'));
@@ -39,6 +39,10 @@ const ConfigurazioniApp = lazy(() => import('../components/ConfigurazioniApp'));
 const AccessLogs = lazy(() => import('../components/AccessLogs')); 
 const GestioneMenu = lazy(() => import('../components/GestioneMenu'));     
 const GestioneScuole = lazy(() => import('../components/GestioneScuole')); 
+
+// --- NUOVI COMPONENTI ---
+const GestioneTipiLezioni = lazy(() => import('../components/GestioneTipiLezioni')); // Catalogo Didattico
+const GestioneTariffe = lazy(() => import('../components/GestioneTariffe'));         // Listini & Anni
 
 export default function Dashboard() {
   const [user, setUser] = useState(null);
@@ -83,15 +87,13 @@ export default function Dashboard() {
             setUser(profile);
             localStorage.setItem('accademia_user', JSON.stringify(profile));
 
-            // --- LOGICA BRANDING (Modificata) ---
+            // LOGICA BRANDING
             if (profile.ruolo === 'Admin') {
-                // ADMIN: Usa sempre il branding dell'Applicazione (Accademia)
                 setSchoolInfo({
-                    name: 'Amministrazione', // O lascia vuoto '' se preferisci
+                    name: 'Amministrazione',
                     logo: DEFAULT_LOGO
                 });
             } else {
-                // UTENTI STANDARD: Usano il branding della Scuola
                 setSchoolInfo({
                     name: profile.scuole?.nome || 'Nessuna Scuola',
                     logo: profile.scuole?.logo_url || DEFAULT_LOGO
@@ -112,10 +114,11 @@ export default function Dashboard() {
                         if (scheda.modulo_codice !== mod.codice) return false;
                         if (profile.ruolo === 'Admin') return true;
                         if (!activeModules.includes(mod.codice)) return false;
+                        // Gestione permessi opzionale se definita in sys_schede
                         if (scheda.ruoli_ammessi && !scheda.ruoli_ammessi.includes(profile.ruolo)) return false;
                         return true;
                     }).map(scheda => ({
-                        id: scheda.codice_vista,
+                        id: scheda.codice_vista, // Questo ID viene usato nello switch renderContent
                         label: scheda.etichetta,
                         icon: ICON_MAP[scheda.icona] || <Settings size={18} /> 
                     }));
@@ -129,6 +132,8 @@ export default function Dashboard() {
                     }
                 });
                 setMenuGroups(groups);
+                
+                // Imposta la vista attiva di default se non c'è
                 if (!activeView && groups.length > 0 && groups[0].items.length > 0) {
                     setActiveView(groups[0].items[0].id);
                 }
@@ -193,12 +198,17 @@ export default function Dashboard() {
 
   if (!user) return <div className="flex items-center justify-center h-screen bg-accademia-dark text-gray-500">Caricamento profilo...</div>;
 
+  // --- MAPPING DELLE VISTE ---
   const renderContent = () => {
     switch (activeView) {
       case 'utenti': return <UtentiList />;
       case 'docenti': return <DocentiList userRole={user.ruolo} />;
       case 'alunni': return <AlunniList userRole={user.ruolo} userEmail={user.email} />;
-      case 'tipi_lezioni': return <TipiLezioni userRole={user.ruolo} config={appConfig} />;
+      
+      // NUOVI COMPONENTI COLLEGATI
+      case 'catalogo_lezioni': return <GestioneTipiLezioni userRole={user.ruolo} />;
+      case 'gestione_tariffe': return <GestioneTariffe userRole={user.ruolo} config={appConfig} />;
+      
       case 'calendario_personale': 
       case 'calendario_docenti': return <Calendario user={user} />;
       case 'registro_lezioni': return <RegistroLezioni user={user} currentGlobalYear={currentAcademicYear} />;
@@ -209,6 +219,7 @@ export default function Dashboard() {
       case 'logs': return <AccessLogs />;
       case 'gestione_menu': return <GestioneMenu />;     
       case 'gestione_scuole': return <GestioneScuole />; 
+      
       default: return <div className="p-10 text-center text-gray-500">Seleziona una voce dal menu</div>;
     }
   };
@@ -219,7 +230,7 @@ export default function Dashboard() {
       {/* SIDEBAR */}
       <aside className={`bg-accademia-card border-r border-gray-800 flex flex-col shadow-2xl z-30 transition-all duration-300 ease-in-out absolute md:relative h-full ${isSidebarOpen ? 'w-64 translate-x-0' : 'w-0 -translate-x-full md:w-0 md:translate-x-0 overflow-hidden'}`}>
         
-        {/* LOGO AREA (FISSA) */}
+        {/* LOGO AREA */}
         <div className="p-6 border-b border-gray-800 flex justify-between items-center min-w-[16rem] h-28 shrink-0"> 
           <div className="flex items-center justify-center w-full pr-2"> 
               <img 
@@ -231,29 +242,43 @@ export default function Dashboard() {
           <button onClick={() => setIsSidebarOpen(false)} className="md:hidden text-gray-400 hover:text-white"><ChevronLeft size={24} /></button>
         </div>
 
-        {/* MENU LIST (SCROLLABILE) */}
-        <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-1 custom-scrollbar min-w-[16rem]">
-          {menuGroups.map((group, index) => (
-              <div key={group.moduleCode} className="mb-2">
-                  {/* SEPARATORE TRA MODULI */}
-                  {index > 0 && (
-                      <div className="my-3 border-t border-gray-800/60 mx-2"></div>
-                  )}
+        {/* MENU LIST */}
+        {/* MENU LIST */}
+<nav className="flex-1 overflow-y-auto py-4 px-3 space-y-1 custom-scrollbar min-w-[16rem]">
+  {menuGroups.map((group, index) => (
+      <div key={group.moduleCode} className="mb-6">
+          
+          {/* SEPARATORE E TITOLO MODULO */}
+          <div className="px-3 mb-2 mt-2">
+            {index > 0 && <div className="border-t border-gray-800/60 mb-3"></div>}
+            <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+                {group.moduleLabel}
+            </h3>
+          </div>
 
-                  {/* Voci del Gruppo */}
-                  <div className="space-y-1">
-                      {group.items.map((item) => (
-                        <button key={item.id} onClick={() => handleMenuClick(item.id)} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group ${activeView === item.id ? 'bg-accademia-red text-white shadow-md shadow-red-900/20' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
-                        <span className={`transition-transform duration-200 ${activeView === item.id ? 'scale-110' : 'group-hover:scale-110'}`}>{item.icon}</span>
-                        <span className="truncate">{item.label}</span>
-                        </button>
-                      ))}
-                  </div>
-              </div>
-          ))}
-        </nav>
+          <div className="space-y-1">
+              {group.items.map((item) => (
+                <button 
+                    key={item.id} 
+                    onClick={() => handleMenuClick(item.id)} 
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group ${
+                        activeView === item.id 
+                        ? 'bg-accademia-red text-white shadow-md shadow-red-900/20' 
+                        : 'text-gray-400 hover:bg-gray-800 hover:text-white'
+                    }`}
+                >
+                    <span className={`transition-transform duration-200 ${activeView === item.id ? 'scale-110' : 'group-hover:scale-110'}`}>
+                        {item.icon}
+                    </span>
+                    <span className="truncate">{item.label}</span>
+                </button>
+              ))}
+          </div>
+      </div>
+  ))}
+</nav>
         
-        {/* FOOTER SIDEBAR (FISSO) */}
+        {/* FOOTER SIDEBAR */}
         <div className="p-4 border-t border-gray-800 min-w-[16rem] text-center shrink-0">
             <div className="text-[10px] text-gray-600 font-mono uppercase tracking-widest">AA: {currentAcademicYear}</div>
         </div>
@@ -270,7 +295,6 @@ export default function Dashboard() {
             <div className="flex flex-col">
                 <div className="flex items-center gap-3 md:hidden"> 
                     <img src={schoolInfo.logo} alt="Logo" className="h-8 w-auto object-contain" />
-                    {/* Su mobile, se non è Admin, mostra il nome scuola */}
                     {user.ruolo !== 'Admin' && (
                         <span className="font-bold text-white text-sm leading-tight truncate max-w-[150px]">{schoolInfo.name}</span>
                     )}
@@ -282,8 +306,6 @@ export default function Dashboard() {
           </div>
           
           <div className="hidden md:flex absolute left-1/2 top-1/2 transform -translate-x-1/2 -translate-y-1/2 items-center gap-4">
-              
-              {/* BADGE SCUOLA CENTRALE: VISIBILE SOLO SE NON SEI ADMIN */}
               {user.ruolo !== 'Admin' && (
                   <div className="flex items-center gap-2 px-3 py-1 bg-gray-900/80 rounded-full border border-gray-700/50 backdrop-blur-sm text-xs font-mono text-gray-300 shadow-sm animate-in fade-in">
                      <Building size={12} className="text-accademia-red"/>
@@ -291,7 +313,6 @@ export default function Dashboard() {
                   </div>
               )}
 
-              {/* USER BADGE */}
               <div className="flex items-center gap-3 bg-gray-900/50 px-4 py-1.5 rounded-full border border-gray-800/50 backdrop-blur-sm">
                   <div className="text-right leading-tight">
                       <div className="text-sm font-medium text-white">{user.nome_esteso}</div>
@@ -315,6 +336,7 @@ export default function Dashboard() {
           </div>
         </header>
 
+        {/* CONTENT AREA */}
         <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6 z-10 custom-scrollbar relative w-full">
             {isSidebarOpen && (<div className="fixed inset-0 bg-black/50 z-20 md:hidden backdrop-blur-sm" onClick={() => setIsSidebarOpen(false)}></div>)}
             <div className="max-w-[1800px] mx-auto h-full flex flex-col">
@@ -327,7 +349,7 @@ export default function Dashboard() {
         </div>
       </main>
 
-      {/* MODALI (Password Change & Confirm) - Invariati */}
+      {/* MODALI (Invariati) */}
       {showPasswordChangeModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
           <div className="bg-accademia-card border border-red-500/50 w-full max-w-md rounded-xl shadow-2xl p-8 animate-in fade-in zoom-in-95">

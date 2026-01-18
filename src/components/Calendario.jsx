@@ -8,34 +8,49 @@ const DAYS = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Saba
 const START_HOUR = 10;
 const END_HOUR = 23;
 const SLOT_MINUTES = 30;
-const TOTAL_SLOTS = (END_HOUR - START_HOUR) * (60 / SLOT_MINUTES); // (23-10)*2 = 26 slots
+const TOTAL_SLOTS = (END_HOUR - START_HOUR) * (60 / SLOT_MINUTES);
 
 export default function Calendario({ user }) {
   const [events, setEvents] = useState([]);
   const [docenti, setDocenti] = useState([]);
+  const [alunni, setAlunni] = useState([]); 
   const [selectedDocenteId, setSelectedDocenteId] = useState(null);
   const [loading, setLoading] = useState(false);
   const [showModal, setShowModal] = useState(false);
-  const [editingEvent, setEditingEvent] = useState(null); // null = nuovo, obj = modifica
+  const [editingEvent, setEditingEvent] = useState(null);
 
   // --- INIT & DATI ---
   useEffect(() => {
+    // Se non sono docente (Admin/Gestore), carico la lista docenti per la select
     if (user.ruolo !== 'Docente') {
       const fetchDocenti = async () => {
-        const { data } = await supabase.from('docenti').select('id, nome').eq('stato', 'Attivo').order('nome');
+        // NOTA: Recuperiamo anche school_id per passarlo al modale
+        const { data } = await supabase
+            .from('docenti')
+            .select('id, nome, cognome, school_id') 
+            .eq('stato', 'Attivo')
+            .order('cognome');
         if (data) setDocenti(data);
       };
       fetchDocenti();
     } else {
+      // Se sono docente, il mio ID è forzato
       setSelectedDocenteId(user.id_collegato);
     }
   }, [user]);
 
+  // Al cambio del docente selezionato, carico EVENTI e ALUNNI ASSOCIATI
   useEffect(() => {
-    if (selectedDocenteId) loadEvents();
-    else setEvents([]);
+    if (selectedDocenteId) {
+      loadEvents();
+      fetchAlunni();
+    } else {
+      setEvents([]);
+      setAlunni([]);
+    }
   }, [selectedDocenteId]);
 
+  // 1. Carica Eventi Calendario
   const loadEvents = async () => {
     if (!selectedDocenteId) return;
     setLoading(true);
@@ -44,7 +59,7 @@ export default function Calendario({ user }) {
         .from('calendario')
         .select(`
           id, giorno_settimana, ora_inizio, durata_minuti, note,
-          alunni ( id, nome ),
+          alunni ( id, nome, cognome ), 
           tipi_lezioni ( id, tipo )
         `)
         .eq('docente_id', selectedDocenteId);
@@ -58,22 +73,36 @@ export default function Calendario({ user }) {
     }
   };
 
+  // 2. Carica Alunni Associati
+  const fetchAlunni = async () => {
+    if (!selectedDocenteId) return;
+    try {
+      const { data, error } = await supabase
+        .from('associazioni')
+        .select('alunni(id, nome, cognome)')
+        .eq('docente_id', selectedDocenteId);
+
+      if (error) throw error;
+
+      const mappedAlunni = data
+        ?.map(item => item.alunni)
+        .filter(Boolean)
+        .sort((a, b) => (a.cognome || '').localeCompare(b.cognome || ''));
+
+      setAlunni(mappedAlunni || []);
+    } catch (err) {
+      console.error("Errore fetch alunni associati:", err);
+    }
+  };
+
   // --- LOGICA POSIZIONAMENTO GRIGLIA ---
-  // Calcola riga inizio e span (altezza) basati su ora e durata
   const getEventStyle = (evt) => {
     const [hh, mm] = evt.ora_inizio.split(':').map(Number);
-    
-    // Calcolo indice slot partenza (0-based)
     const startSlot = (hh - START_HOUR) * 2 + (mm / 30);
-    
-    // Calcolo quanti slot occupa
     const span = Math.ceil(evt.durata_minuti / 30);
-
-    // CSS Grid Rows (1-based)
     const gridRowStart = startSlot + 1;
     const gridRowEnd = gridRowStart + span;
 
-    // Colore
     let bgColor = 'bg-accademia-red border-red-800'; 
     const tipo = evt.tipi_lezioni?.tipo?.toLowerCase() || '';
     if (tipo.includes('teoria')) bgColor = 'bg-green-700 border-green-800';
@@ -88,8 +117,6 @@ export default function Calendario({ user }) {
   // --- HANDLERS ---
   const handleSlotClick = (dayIndex, slotIndex) => {
     if (!selectedDocenteId) return;
-    
-    // Calcola ora dal click
     const totalMinutes = slotIndex * 30;
     const hh = START_HOUR + Math.floor(totalMinutes / 60);
     const mm = totalMinutes % 60;
@@ -104,12 +131,11 @@ export default function Calendario({ user }) {
   };
 
   const handleEventClick = (e, evt) => {
-    e.stopPropagation(); // Evita click slot sottostante
+    e.stopPropagation(); 
     setEditingEvent(evt);
     setShowModal(true);
   };
 
-  // Generazione etichette orarie
   const timeLabels = useMemo(() => {
     const labels = [];
     for (let i = 0; i < TOTAL_SLOTS; i++) {
@@ -120,6 +146,12 @@ export default function Calendario({ user }) {
     }
     return labels;
   }, []);
+
+  // --- CALCOLO VARIABILE MANCANTE ---
+  // Se sono Docente, la scuola è la mia. Se sono Admin, è la scuola del docente che ho selezionato nel menu a tendina.
+  const activeSchoolId = user.ruolo === 'Docente' 
+    ? user.school_id 
+    : (docenti.find(d => d.id === selectedDocenteId)?.school_id || '');
 
   return (
     <div className="flex flex-col h-full overflow-hidden relative">
@@ -135,7 +167,7 @@ export default function Calendario({ user }) {
                 onChange={(e) => setSelectedDocenteId(e.target.value)}
               >
                 <option value="">-- Seleziona Docente --</option>
-                {docenti.map(d => <option key={d.id} value={d.id}>{d.nome}</option>)}
+                {docenti.map(d => <option key={d.id} value={d.id}>{d.cognome} {d.nome}</option>)}
               </select>
               <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-500">
                 <Users size={16} />
@@ -192,8 +224,6 @@ export default function Calendario({ user }) {
 
             {/* Body Griglia */}
             <div className="grid grid-cols-[60px_repeat(6,1fr)] gap-x-1 relative">
-              
-              {/* Colonna Orari */}
               <div className="flex flex-col text-right pr-3 text-xs text-gray-500 font-mono pt-[-8px]">
                 {timeLabels.map((time, i) => (
                   <div key={i} className="h-12 border-t border-transparent relative -top-3">
@@ -202,20 +232,11 @@ export default function Calendario({ user }) {
                 ))}
               </div>
 
-              {/* Colonne Giorni (Background Slots) */}
               {DAYS.map((day, dayIndex) => (
                 <div key={day} className="relative border-l border-gray-800/50">
-                  {/* Genera Slot Vuoti Cliccabili */}
                   {Array.from({ length: TOTAL_SLOTS }).map((_, slotIndex) => {
-                    // Logica per differenziare le righe:
-                    // slotIndex 0 = 10:00-10:30 (Bottom 10:30)
-                    // slotIndex 1 = 10:30-11:00 (Bottom 11:00)
-                    // Se (slotIndex + 1) è pari, è un'ora piena (11:00, 12:00...) -> Bordo solido scuro
-                    // Se (slotIndex + 1) è dispari, è una mezz'ora (10:30, 11:30...) -> Bordo tratteggiato leggero
                     const isFullHourLine = (slotIndex + 1) % 2 === 0;
-                    const borderClass = isFullHourLine 
-                      ? 'border-gray-700' // Bordo ora piena (più visibile)
-                      : 'border-gray-800/40 border-dashed'; // Bordo mezz'ora (meno visibile)
+                    const borderClass = isFullHourLine ? 'border-gray-700' : 'border-gray-800/40 border-dashed';
 
                     return (
                       <div 
@@ -226,7 +247,6 @@ export default function Calendario({ user }) {
                     );
                   })}
 
-                  {/* Renderizza Eventi per questo giorno SOPRA gli slot */}
                   {events
                     .filter(e => e.giorno_settimana === day)
                     .map(evt => {
@@ -237,14 +257,13 @@ export default function Calendario({ user }) {
                           onClick={(e) => handleEventClick(e, evt)}
                           className={`absolute w-[94%] left-[3%] rounded px-2 py-1 text-xs cursor-pointer shadow-md hover:brightness-110 transition-all border-l-4 z-10 overflow-hidden flex flex-col justify-center leading-tight ${styleClass}`}
                           style={{ 
-                            gridRow, // Fallback
-                            // Calcolo Absolute: (SlotPartenza * AltezzaSlot)
-                            top: `${((parseInt(evt.ora_inizio.split(':')[0]) - START_HOUR) * 2 + (parseInt(evt.ora_inizio.split(':')[1]) / 30)) * 3}rem`, // 3rem = 12 (h-12)
+                            gridRow,
+                            top: `${((parseInt(evt.ora_inizio.split(':')[0]) - START_HOUR) * 2 + (parseInt(evt.ora_inizio.split(':')[1]) / 30)) * 3}rem`,
                             height: `${(evt.durata_minuti / 30) * 3}rem`
                           }}
                         >
                           <div className="font-bold text-white truncate">
-                            {evt.alunni?.nome || 'Sconosciuto'}
+                            {evt.alunni?.cognome} {evt.alunni?.nome}
                           </div>
                           <div className="text-white/80 text-[10px] truncate">
                             {evt.tipi_lezioni?.tipo}
@@ -262,12 +281,13 @@ export default function Calendario({ user }) {
         )}
       </div>
 
-      {/* Modale */}
       {showModal && (
         <ModalEvento
           event={editingEvent}
           events={events}
           docenteId={selectedDocenteId}
+          alunni={alunni}
+          schoolId={activeSchoolId} // ORA LA VARIABILE ESISTE
           onClose={() => setShowModal(false)}
           onSave={() => { setShowModal(false); loadEvents(); }}
         />

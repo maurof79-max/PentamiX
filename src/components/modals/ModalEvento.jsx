@@ -6,8 +6,7 @@ import ConfirmDialog from '../ConfirmDialog';
 
 const DAYS = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato'];
 
-export default function ModalEvento({ event, events, docenteId, onClose, onSave }) {
-  const [alunni, setAlunni] = useState([]);
+export default function ModalEvento({ event, events, docenteId, alunni, schoolId, onClose, onSave }) {
   const [tipiLezioni, setTipiLezioni] = useState([]);
   
   // Stati per i Dialog
@@ -15,7 +14,7 @@ export default function ModalEvento({ event, events, docenteId, onClose, onSave 
   const [showOverlapWarning, setShowOverlapWarning] = useState(false); 
 
   // Se event ha un id, è modifica.
-  const isEdit = event?.id || event?.original_id; 
+  const isEdit = !!(event?.id || event?.original_id); 
 
   const [formData, setFormData] = useState({
     id: event?.id || null,
@@ -26,26 +25,57 @@ export default function ModalEvento({ event, events, docenteId, onClose, onSave 
     note: event?.note || ''
   });
 
+  // --- FETCH TIPI LEZIONI ---
   useEffect(() => {
-    const fetchData = async () => {
-      // 1. Alunni associati
-      const { data: assocData } = await supabase
-        .from('associazioni')
-        .select('alunni(id, nome)')
-        .eq('docente_id', docenteId);
-      
-      let mappedAlunni = assocData?.map(a => a.alunni).filter(Boolean) || [];
-      if (mappedAlunni.length === 0) {
-         const { data: allAlunni } = await supabase.from('alunni').select('id, nome').eq('stato', 'Attivo').order('nome');
-         mappedAlunni = allAlunni || [];
-      }
-      setAlunni(mappedAlunni);
+    let mounted = true;
 
-      // 2. Tipi Lezioni
-      const { data: tipiData } = await supabase.from('tipi_lezioni').select('*').order('tipo');
-      setTipiLezioni(tipiData || []);
+    const fetchTipi = async () => {
+        if (!docenteId) return; 
+
+        try {
+            // 1. Prendi gli ID abilitati per il docente
+            const { data: abilitazioni, error: errAbilitazioni } = await supabase
+                .from('docenti_tipi_lezioni')
+                .select('tipo_lezione_id')
+                .eq('docente_id', docenteId);
+            
+            if (errAbilitazioni) {
+                console.error("Errore fetch abilitazioni:", errAbilitazioni);
+                return;
+            }
+
+            const idsAbilitati = abilitazioni?.map(a => a.tipo_lezione_id) || [];
+
+            // 2. Se non ha abilitazioni, lista vuota. 
+            // IMPORTANTE: Non eseguire .in() con array vuoto, causa errore Supabase.
+            if (idsAbilitati.length === 0) {
+                if(mounted) setTipiLezioni([]); 
+                return; 
+            }
+
+            // 3. Carica i dettagli delle lezioni abilitate
+            const { data: tipiData, error: errTipi } = await supabase
+                .from('tipi_lezioni')
+                .select('*')
+                .in('id', idsAbilitati) 
+                .eq('attivo', true)
+                .order('tipo');
+            
+            if (errTipi) {
+                console.error("Errore fetch tipi:", errTipi);
+                return;
+            }
+
+            if(mounted) setTipiLezioni(tipiData || []);
+            
+        } catch (error) {
+            console.error("Errore generale fetchTipi:", error);
+        }
     };
-    fetchData();
+    
+    fetchTipi();
+
+    return () => { mounted = false; };
   }, [docenteId]);
 
   const handleChange = (e) => {
@@ -58,13 +88,19 @@ export default function ModalEvento({ event, events, docenteId, onClose, onSave 
     const startMinutes = hh * 60 + mm;
     const endMinutes = startMinutes + duration;
 
-    const conflicts = events.filter(e => {
+    // Assicurati che events sia un array
+    const safeEvents = Array.isArray(events) ? events : [];
+
+    const conflicts = safeEvents.filter(e => {
       if (currentId && e.id === currentId) return false;
       if (e.giorno_settimana !== formData.giorno) return false;
 
+      // Safety check su ora_inizio
+      if (!e.ora_inizio) return false;
+
       const [eh, em] = e.ora_inizio.split(':').map(Number);
       const eStart = eh * 60 + em;
-      const eEnd = eStart + e.durata_minuti;
+      const eEnd = eStart + (e.durata_minuti || 60);
 
       return (startMinutes < eEnd && endMinutes > eStart);
     });
@@ -78,7 +114,6 @@ export default function ModalEvento({ event, events, docenteId, onClose, onSave 
       const selectedTipo = tipiLezioni.find(t => t.id === formData.lezione_id);
       const durata = selectedTipo ? selectedTipo.durata_minuti : 60;
 
-      // 1. Validazione Sovrapposizione (sostituito alert con dialog state)
       if (checkOverlap(formData.ora, durata, formData.id)) {
         setShowOverlapWarning(true); 
         return; 
@@ -100,6 +135,7 @@ export default function ModalEvento({ event, events, docenteId, onClose, onSave 
       } else {
         const { error } = await supabase.from('calendario').insert([payload]);
         if (error) throw error;
+        
         await supabase.from('associazioni').upsert(
             { docente_id: docenteId, alunno_id: formData.alunno_id }, 
             { onConflict: 'docente_id, alunno_id' }
@@ -116,6 +152,9 @@ export default function ModalEvento({ event, events, docenteId, onClose, onSave 
     if (!error) onSave();
     setShowDeleteConfirm(false);
   };
+
+  // Safe check per alunni
+  const safeAlunni = Array.isArray(alunni) ? alunni : [];
 
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
@@ -151,6 +190,9 @@ export default function ModalEvento({ event, events, docenteId, onClose, onSave 
                   <option value="">Seleziona...</option>
                   {tipiLezioni.map(t => <option key={t.id} value={t.id}>{t.tipo} ({t.durata_minuti} min)</option>)}
                 </select>
+                {tipiLezioni.length === 0 && (
+                    <p className="text-[10px] text-red-400 mt-1">Nessuna lezione abilitata per questo docente.</p>
+                )}
               </div>
             </div>
 
@@ -158,7 +200,11 @@ export default function ModalEvento({ event, events, docenteId, onClose, onSave 
               <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Alunno</label>
               <select name="alunno_id" value={formData.alunno_id} onChange={handleChange} className="w-full bg-accademia-input border border-gray-700 rounded-lg p-2.5 text-white focus:border-accademia-red focus:outline-none" required>
                 <option value="">Seleziona...</option>
-                {alunni.map(a => <option key={a.id} value={a.id}>{a.nome}</option>)}
+                {safeAlunni.map(a => (
+                    <option key={a.id} value={a.id}>
+                        {a.cognome} {a.nome}
+                    </option>
+                ))}
               </select>
             </div>
 
@@ -184,9 +230,6 @@ export default function ModalEvento({ event, events, docenteId, onClose, onSave 
           </div>
         </div>
 
-        {/* --- DIALOGS --- */}
-        
-        {/* 1. Dialog Conferma Eliminazione */}
         <ConfirmDialog
             isOpen={showDeleteConfirm}
             type="danger"
@@ -198,14 +241,13 @@ export default function ModalEvento({ event, events, docenteId, onClose, onSave 
             onCancel={() => setShowDeleteConfirm(false)}
         />
 
-        {/* 2. Dialog Avviso Sovrapposizione */}
         <ConfirmDialog
             isOpen={showOverlapWarning}
             type="warning"
             title="Sovrapposizione Rilevata"
             message="L'orario selezionato entra in conflitto con un'altra lezione esistente per questo giorno. Verifica l'orario e riprova."
             confirmText="Ho Capito"
-            showCancel={false} // Nasconde "Annulla" per renderlo un semplice alert
+            showCancel={false}
             onConfirm={() => setShowOverlapWarning(false)}
         />
 

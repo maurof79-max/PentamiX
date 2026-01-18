@@ -66,13 +66,19 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
     }
   }, [currentGlobalYear, user.ruolo]);
 
-  // --- 3. Carica Risorse (MODIFICATO PER COGNOME NOME) ---
+  // --- 3. Carica Risorse (Docenti/Alunni) ---
   useEffect(() => {
     const fetchResources = async () => {
       // Docenti (Solo se non è docente)
       if (user.ruolo !== 'Docente') {
-        const { data: d } = await supabase.from('docenti').select('id, nome, cognome').order('cognome');
-        // Uniamo cognome e nome per visualizzazione pulita
+        let queryDoc = supabase.from('docenti').select('id, nome, cognome, school_id').order('cognome');
+        
+        // FILTRO GESTORE: Carica solo i docenti della scuola assegnata
+        if (user.school_id) {
+            queryDoc = queryDoc.eq('school_id', user.school_id);
+        }
+
+        const { data: d } = await queryDoc;
         const docentiFormatted = d?.map(doc => ({
             ...doc,
             nome_completo: `${doc.cognome} ${doc.nome}`
@@ -80,10 +86,10 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
         setDocenti(docentiFormatted);
       }
 
-      // Alunni: Se docente, carica solo i suoi associati. Se admin, tutti.
+      // Alunni
       let alunniList = [];
       if (user.ruolo === 'Docente') {
-          // Fetch tramite associazioni per vedere solo i propri studenti
+          // Docente vede solo i suoi associati
           const { data: assocData } = await supabase
             .from('associazioni')
             .select('alunni(id, nome, cognome)')
@@ -91,15 +97,19 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
           
           alunniList = assocData?.map(a => a.alunni).filter(Boolean) || [];
       } else {
-          // Admin vede tutti (RLS filtra per scuola)
-          const { data: a } = await supabase
-            .from('alunni')
-            .select('id, nome, cognome')
-            .eq('stato', 'Attivo');
+          // Admin/Gestore
+          let queryAlunni = supabase.from('alunni').select('id, nome, cognome').eq('stato', 'Attivo');
+          
+          // FILTRO GESTORE: Carica solo alunni della scuola assegnata
+          if (user.school_id) {
+              queryAlunni = queryAlunni.eq('school_id', user.school_id);
+          }
+
+          const { data: a } = await queryAlunni;
           alunniList = a || [];
       }
 
-      // Ordinamento locale per Cognome
+      // Ordinamento per Cognome
       alunniList.sort((a, b) => (a.cognome || '').localeCompare(b.cognome || ''));
       setAlunni(alunniList);
       
@@ -116,7 +126,7 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
     fetchResources();
   }, [filters.anno, user]);
 
-  // --- 4. Fetch Lezioni (MODIFICATO SELECT) ---
+  // --- 4. Fetch Lezioni ---
   const fetchLezioni = async () => {
     if (!filters.anno) return; 
     setLoading(true);
@@ -125,19 +135,28 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
       const startDate = `${startYear}-09-01`;
       const endDate = `${endYear}-08-31`;
 
+      // NOTA: Usiamo 'docenti!inner' per poter filtrare sulla tabella collegata (school_id)
       let query = supabase
         .from('registro')
         .select(`
           id, data_lezione, convalidato, anno_accademico,
-          docenti ( id, nome, cognome ),
+          docenti!inner ( id, nome, cognome, school_id ),
           alunni ( id, nome, cognome ),
           tipi_lezioni ( tipo, costo )
         `)
         .gte('data_lezione', startDate)
         .lte('data_lezione', endDate);
 
-      if (user.ruolo === 'Docente') query = query.eq('docente_id', user.id_collegato);
-      else if (filters.docente_id) query = query.eq('docente_id', filters.docente_id);
+      if (user.ruolo === 'Docente') {
+          query = query.eq('docente_id', user.id_collegato);
+      } else {
+          if (filters.docente_id) query = query.eq('docente_id', filters.docente_id);
+          
+          // FILTRO GESTORE: Visualizza solo lezioni di docenti della propria scuola
+          if (user.school_id) {
+              query = query.eq('docenti.school_id', user.school_id);
+          }
+      }
 
       if (filters.alunno_id) query = query.eq('alunno_id', filters.alunno_id);
       
@@ -208,7 +227,7 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
       return true; 
   };
 
-  // --- CRUD & SORTING (MODIFICATO PER COGNOME) ---
+  // --- CRUD & SORTING ---
   const handleSort = (key) => {
     let direction = 'asc';
     if (sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
@@ -220,12 +239,10 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
       let valA, valB;
       switch(sortConfig.key) {
           case 'data_lezione': valA = new Date(a.data_lezione); valB = new Date(b.data_lezione); break;
-          // Ordina per Cognome Docente
           case 'docente': 
             valA = (a.docenti?.cognome || a.docenti?.nome || '').toLowerCase(); 
             valB = (b.docenti?.cognome || b.docenti?.nome || '').toLowerCase(); 
             break;
-          // Ordina per Cognome Alunno
           case 'alunno': 
             valA = (a.alunni?.cognome || a.alunni?.nome || '').toLowerCase(); 
             valB = (b.alunni?.cognome || b.alunni?.nome || '').toLowerCase(); 
@@ -401,7 +418,7 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
   );
 }
 
-// --- MODALE (MODIFICATO PER VISUALIZZARE COGNOME NOME) ---
+// --- MODALE ---
 function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose, onSave }) {
   const [formData, setFormData] = useState({
     id: lezione?.id || null,
@@ -410,6 +427,40 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
     tipo_lezione_id: lezione?.tipo_lezione_id || '', 
     data_lezione: lezione?.data_lezione ? lezione.data_lezione.slice(0, 10) : new Date().toISOString().slice(0, 10)
   });
+
+  const [filteredTariffe, setFilteredTariffe] = useState([]);
+  const [loadingTariffe, setLoadingTariffe] = useState(false);
+
+  // EFFETTO: Filtra Tariffe in base alle competenze del Docente
+  useEffect(() => {
+    const filterTariffeByDocente = async () => {
+      if (!formData.docente_id) {
+        setFilteredTariffe([]);
+        return;
+      }
+      setLoadingTariffe(true);
+      
+      const { data: competenze, error } = await supabase
+        .from('docenti_tipi_lezioni')
+        .select(`tipi_lezioni ( tipo )`)
+        .eq('docente_id', formData.docente_id);
+
+      if (error) {
+        console.error("Errore recupero competenze docente:", error);
+        setFilteredTariffe(tariffe); // Fallback: mostra tutto
+      } else {
+        const allowedTypes = competenze?.map(c => c.tipi_lezioni?.tipo) || [];
+        // Filtra le tariffe (tariffe.tipo_lezione deve matchare con tipi_lezioni.tipo)
+        const filtered = tariffe.filter(t => allowedTypes.includes(t.tipo_lezione));
+        setFilteredTariffe(filtered);
+      }
+      setLoadingTariffe(false);
+    };
+
+    if (!formData.id) {
+        filterTariffeByDocente();
+    }
+  }, [formData.docente_id, tariffe, formData.id]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -430,6 +481,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
           return;
         }
 
+        // Cerca se esiste già il tipo_lezione nella tabella 'tipi_lezioni' con quel costo
         const { data: existingTipo, error: searchError } = await supabase
           .from('tipi_lezioni')
           .select('id')
@@ -442,13 +494,16 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
         if (existingTipo) {
           tipoLezioneId = existingTipo.id;
         } else {
+          // Crea nuovo tipo lezione se manca
           const newTipoId = 'TL' + Date.now();
           const { error: insertTipoError } = await supabase
             .from('tipi_lezioni')
             .insert([{
               id: newTipoId,
               tipo: tariffaSelezionata.tipo_lezione,
-              costo: tariffaSelezionata.costo
+              costo: tariffaSelezionata.costo,
+              durata_minuti: 60,
+              school_id: user.school_id
             }]);
 
           if (insertTipoError) throw insertTipoError;
@@ -490,14 +545,19 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
           <button onClick={onClose}><X className="text-gray-400 hover:text-white"/></button>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">
+          
+          {/* SELEZIONE DOCENTE */}
           {user.ruolo !== 'Docente' && (
             <div>
               <label className="block text-xs text-gray-400 uppercase mb-1">Docente</label>
               <select 
                 value={formData.docente_id} 
-                onChange={e=>setFormData({...formData,docente_id:e.target.value})} 
+                onChange={e=>{
+                    setFormData({...formData, docente_id:e.target.value, tipo_lezione_id: ''}); 
+                }} 
                 className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" 
                 required
+                disabled={!!formData.id} 
               >
                 <option value="">Seleziona...</option>
                 {docenti.map(d=><option key={d.id} value={d.id}>{d.nome_completo}</option>)}
@@ -505,6 +565,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
             </div>
           )}
           
+          {/* SELEZIONE ALUNNO */}
           <div>
             <label className="block text-xs text-gray-400 uppercase mb-1">Alunno</label>
             <select 
@@ -518,6 +579,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
             </select>
           </div>
           
+          {/* SELEZIONE TIPO LEZIONE */}
           <div>
             <label className="block text-xs text-gray-400 uppercase mb-1">
               Tipo Lezione {!formData.id && `(Tariffa ${anno})`}
@@ -529,21 +591,29 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
                   onChange={e=>setFormData({...formData,tipo_lezione_id:e.target.value})} 
                   className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" 
                   required
+                  disabled={!formData.docente_id || loadingTariffe}
                 >
-                  <option value="">Seleziona...</option>
-                  {tariffe.map(t=>(
+                  <option value="">
+                      {!formData.docente_id ? "Seleziona prima un docente..." : loadingTariffe ? "Caricamento competenze..." : "Seleziona..."}
+                  </option>
+                  
+                  {filteredTariffe.map(t=>(
                     <option key={t.id} value={t.id}>
-                      {t.tipo_lezione} (€ {t.costo})
+                      {t.tipo_lezione}
                     </option>
                   ))}
                 </select>
-                {tariffe.length === 0 && (
-                  <p className="text-xs text-red-400 mt-1">Nessuna tariffa trovata per l'anno {anno}</p>
+
+                {formData.docente_id && !loadingTariffe && filteredTariffe.length === 0 && (
+                  <p className="text-xs text-yellow-500 mt-1 italic">
+                    Nessuna tariffa disponibile per le competenze di questo docente nell'anno {anno}.
+                  </p>
                 )}
               </>
             ) : (
+              // IN MODIFICA (READ ONLY)
               <div className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-gray-400 cursor-not-allowed">
-                {lezione?.tipi_lezioni?.tipo || 'N/A'} (€ {lezione?.tipi_lezioni?.costo || 0})
+                {lezione?.tipi_lezioni?.tipo || 'N/A'}
               </div>
             )}
           </div>
@@ -560,8 +630,8 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
           </div>
           
           <div className="flex justify-end pt-4">
-            <button type="submit" className="bg-accademia-red hover:bg-red-700 text-white px-6 py-2 rounded-lg font-bold transition-colors">
-              Salva
+            <button type="submit" className="bg-accademia-red hover:bg-red-700 text-white px-6 py-2 rounded-lg font-bold transition-colors shadow-lg">
+              Salva Lezione
             </button>
           </div>
         </form>

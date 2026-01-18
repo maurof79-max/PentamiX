@@ -23,7 +23,7 @@ const ICON_MAP = {
     'Shield': <Shield size={18} />,
     'LayoutDashboard': <LayoutDashboard size={18} />, 
     'Building': <Building size={18} />,
-    'Archive': <Archive size={18} /> // Aggiunta icona Archive per Tariffe
+    'Archive': <Archive size={18} /> 
 };
 
 // COMPONENTS (Lazy Loading)
@@ -41,8 +41,8 @@ const GestioneMenu = lazy(() => import('../components/GestioneMenu'));
 const GestioneScuole = lazy(() => import('../components/GestioneScuole')); 
 
 // --- NUOVI COMPONENTI ---
-const GestioneTipiLezioni = lazy(() => import('../components/GestioneTipiLezioni')); // Catalogo Didattico
-const GestioneTariffe = lazy(() => import('../components/GestioneTariffe'));         // Listini & Anni
+const GestioneTipiLezioni = lazy(() => import('../components/GestioneTipiLezioni')); 
+const GestioneTariffe = lazy(() => import('../components/GestioneTariffe'));         
 
 export default function Dashboard() {
   const [user, setUser] = useState(null);
@@ -118,7 +118,7 @@ export default function Dashboard() {
                         if (scheda.ruoli_ammessi && !scheda.ruoli_ammessi.includes(profile.ruolo)) return false;
                         return true;
                     }).map(scheda => ({
-                        id: scheda.codice_vista, // Questo ID viene usato nello switch renderContent
+                        id: scheda.codice_vista, 
                         label: scheda.etichetta,
                         icon: ICON_MAP[scheda.icona] || <Settings size={18} /> 
                     }));
@@ -142,7 +142,14 @@ export default function Dashboard() {
 
         if (currentUser && currentUser.must_change_password) setShowPasswordChangeModal(true);
         
-        const { data: yearData } = await supabase.from('anni_accademici').select('anno').eq('is_current', true).single();
+        // --- FIX QUI: Usiamo limit(1).maybeSingle() invece di single() ---
+        const { data: yearData } = await supabase
+            .from('anni_accademici')
+            .select('anno')
+            .eq('is_current', true)
+            .limit(1)
+            .maybeSingle();
+            
         if (yearData) setCurrentAcademicYear(yearData.anno);
 
         const { data: configData } = await supabase.from('config_app').select('*');
@@ -205,14 +212,15 @@ export default function Dashboard() {
       case 'docenti': return <DocentiList userRole={user.ruolo} />;
       case 'alunni': return <AlunniList userRole={user.ruolo} userEmail={user.email} />;
       
-      // NUOVI COMPONENTI COLLEGATI
       case 'catalogo_lezioni': return <GestioneTipiLezioni userRole={user.ruolo} />;
       case 'gestione_tariffe': return <GestioneTariffe userRole={user.ruolo} config={appConfig} />;
       
       case 'calendario_personale': 
       case 'calendario_docenti': return <Calendario user={user} />;
       case 'registro_lezioni': return <RegistroLezioni user={user} currentGlobalYear={currentAcademicYear} />;
-      case 'pagamenti': return <Pagamenti currentGlobalYear={currentAcademicYear} />;
+      
+      case 'pagamenti': return <Pagamenti user={user} currentGlobalYear={currentAcademicYear} />;
+      
       case 'dettaglio_pagamenti': return <DettaglioPagamenti />;
       case 'finanza': return <RiepilogoFinanziario />;
       case 'configurazioni': return <ConfigurazioniApp />;
@@ -243,42 +251,37 @@ export default function Dashboard() {
         </div>
 
         {/* MENU LIST */}
-        {/* MENU LIST */}
-<nav className="flex-1 overflow-y-auto py-4 px-3 space-y-1 custom-scrollbar min-w-[16rem]">
-  {menuGroups.map((group, index) => (
-      <div key={group.moduleCode} className="mb-6">
-          
-          {/* SEPARATORE E TITOLO MODULO */}
-          <div className="px-3 mb-2 mt-2">
-            {index > 0 && <div className="border-t border-gray-800/60 mb-3"></div>}
-            <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
-                {group.moduleLabel}
-            </h3>
-          </div>
-
-          <div className="space-y-1">
-              {group.items.map((item) => (
-                <button 
-                    key={item.id} 
-                    onClick={() => handleMenuClick(item.id)} 
-                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group ${
-                        activeView === item.id 
-                        ? 'bg-accademia-red text-white shadow-md shadow-red-900/20' 
-                        : 'text-gray-400 hover:bg-gray-800 hover:text-white'
-                    }`}
-                >
-                    <span className={`transition-transform duration-200 ${activeView === item.id ? 'scale-110' : 'group-hover:scale-110'}`}>
-                        {item.icon}
-                    </span>
-                    <span className="truncate">{item.label}</span>
-                </button>
-              ))}
-          </div>
-      </div>
-  ))}
-</nav>
+        <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-1 custom-scrollbar min-w-[16rem]">
+          {menuGroups.map((group, index) => (
+              <div key={group.moduleCode} className="mb-6">
+                  <div className="px-3 mb-2 mt-2">
+                    {index > 0 && <div className="border-t border-gray-800/60 mb-3"></div>}
+                    <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+                        {group.moduleLabel}
+                    </h3>
+                  </div>
+                  <div className="space-y-1">
+                      {group.items.map((item) => (
+                        <button 
+                            key={item.id} 
+                            onClick={() => handleMenuClick(item.id)} 
+                            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group ${
+                                activeView === item.id 
+                                ? 'bg-accademia-red text-white shadow-md shadow-red-900/20' 
+                                : 'text-gray-400 hover:bg-gray-800 hover:text-white'
+                            }`}
+                        >
+                            <span className={`transition-transform duration-200 ${activeView === item.id ? 'scale-110' : 'group-hover:scale-110'}`}>
+                                {item.icon}
+                            </span>
+                            <span className="truncate">{item.label}</span>
+                        </button>
+                      ))}
+                  </div>
+              </div>
+          ))}
+        </nav>
         
-        {/* FOOTER SIDEBAR */}
         <div className="p-4 border-t border-gray-800 min-w-[16rem] text-center shrink-0">
             <div className="text-[10px] text-gray-600 font-mono uppercase tracking-widest">AA: {currentAcademicYear}</div>
         </div>
@@ -336,7 +339,6 @@ export default function Dashboard() {
           </div>
         </header>
 
-        {/* CONTENT AREA */}
         <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6 z-10 custom-scrollbar relative w-full">
             {isSidebarOpen && (<div className="fixed inset-0 bg-black/50 z-20 md:hidden backdrop-blur-sm" onClick={() => setIsSidebarOpen(false)}></div>)}
             <div className="max-w-[1800px] mx-auto h-full flex flex-col">
@@ -349,7 +351,6 @@ export default function Dashboard() {
         </div>
       </main>
 
-      {/* MODALI (Invariati) */}
       {showPasswordChangeModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
           <div className="bg-accademia-card border border-red-500/50 w-full max-w-md rounded-xl shadow-2xl p-8 animate-in fade-in zoom-in-95">
@@ -362,14 +363,12 @@ export default function Dashboard() {
                 Per motivi di sicurezza, è necessario impostare una nuova password personale prima di continuare.
               </p>
             </div>
-
             <ChangePasswordForm 
               onSuccess={async () => {
                 await supabase.from('utenti').update({ must_change_password: false }).eq('id', user.id);
                 const updatedUser = { ...user, must_change_password: false };
                 setUser(updatedUser);
                 localStorage.setItem('accademia_user', JSON.stringify(updatedUser));
-                
                 setShowPasswordChangeModal(false);
                 setShowSuccessDialog(true);
               }} 
@@ -403,7 +402,6 @@ export default function Dashboard() {
   );
 }
 
-// Sub-Component Form per Cambio Password
 function ChangePasswordForm({ onSuccess }) {
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');

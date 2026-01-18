@@ -4,7 +4,8 @@ import { supabase } from '../supabaseClient';
 import { 
   LogOut, Calendar, Users, DollarSign, BookOpen, Settings, 
   UserCog, GraduationCap, ClipboardList, TableProperties, Menu, ChevronLeft,
-  Shield, LayoutDashboard, Building, Archive 
+  Shield, LayoutDashboard, Building, Archive,
+  ReceiptText, Euro, Scale // <--- IMPORTATI NUOVI COMPONENTI
 } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
 
@@ -23,7 +24,11 @@ const ICON_MAP = {
     'Shield': <Shield size={18} />,
     'LayoutDashboard': <LayoutDashboard size={18} />, 
     'Building': <Building size={18} />,
-    'Archive': <Archive size={18} /> 
+    'Archive': <Archive size={18} />,
+    // --- NUOVE ICONE AGGIUNTE ALLA MAPPA ---
+    'ReceiptText': <ReceiptText size={18} />,
+    'Euro': <Euro size={18} />,
+    'Scale': <Scale size={18} />
 };
 
 // COMPONENTS (Lazy Loading)
@@ -39,27 +44,19 @@ const ConfigurazioniApp = lazy(() => import('../components/ConfigurazioniApp'));
 const AccessLogs = lazy(() => import('../components/AccessLogs')); 
 const GestioneMenu = lazy(() => import('../components/GestioneMenu'));     
 const GestioneScuole = lazy(() => import('../components/GestioneScuole')); 
-
-// --- NUOVI COMPONENTI ---
+const CompensiDocenti = lazy(() => import('../components/CompensiDocenti')); 
 const GestioneTipiLezioni = lazy(() => import('../components/GestioneTipiLezioni')); 
 const GestioneTariffe = lazy(() => import('../components/GestioneTariffe'));         
 
 export default function Dashboard() {
   const [user, setUser] = useState(null);
   const [activeView, setActiveView] = useState(''); 
-  
-  // STRUTTURA MENU RAGGRUPPATA
   const [menuGroups, setMenuGroups] = useState([]); 
-  
   const [isSidebarOpen, setIsSidebarOpen] = useState(true); 
   const [currentAcademicYear, setCurrentAcademicYear] = useState('2025/2026');
   const [appConfig, setAppConfig] = useState({}); 
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
-  
-  // Dati Scuola Corrente
   const [schoolInfo, setSchoolInfo] = useState({ name: '', logo: '' });
-
-  // STATI MODALI
   const [showPasswordChangeModal, setShowPasswordChangeModal] = useState(false);
   const [showSuccessDialog, setShowSuccessDialog] = useState(false);
   
@@ -87,7 +84,6 @@ export default function Dashboard() {
             setUser(profile);
             localStorage.setItem('accademia_user', JSON.stringify(profile));
 
-            // LOGICA BRANDING
             if (profile.ruolo === 'Admin') {
                 setSchoolInfo({
                     name: 'Amministrazione',
@@ -102,9 +98,7 @@ export default function Dashboard() {
 
             const activeModules = profile.scuole?.moduli_attivi || [];
 
-            // 1. CARICHIAMO I MODULI
             const { data: moduliData } = await supabase.from('sys_moduli').select('*').order('ordine');
-            // 2. CARICHIAMO LE SCHEDE
             const { data: schedeData } = await supabase.from('sys_schede').select('*').order('ordine');
 
             if (moduliData && schedeData) {
@@ -114,7 +108,6 @@ export default function Dashboard() {
                         if (scheda.modulo_codice !== mod.codice) return false;
                         if (profile.ruolo === 'Admin') return true;
                         if (!activeModules.includes(mod.codice)) return false;
-                        // Gestione permessi opzionale se definita in sys_schede
                         if (scheda.ruoli_ammessi && !scheda.ruoli_ammessi.includes(profile.ruolo)) return false;
                         return true;
                     }).map(scheda => ({
@@ -133,7 +126,6 @@ export default function Dashboard() {
                 });
                 setMenuGroups(groups);
                 
-                // Imposta la vista attiva di default se non c'è
                 if (!activeView && groups.length > 0 && groups[0].items.length > 0) {
                     setActiveView(groups[0].items[0].id);
                 }
@@ -142,7 +134,6 @@ export default function Dashboard() {
 
         if (currentUser && currentUser.must_change_password) setShowPasswordChangeModal(true);
         
-        // --- FIX QUI: Usiamo limit(1).maybeSingle() invece di single() ---
         const { data: yearData } = await supabase
             .from('anni_accademici')
             .select('anno')
@@ -162,7 +153,6 @@ export default function Dashboard() {
     initDashboard();
   }, [navigate]); 
 
-  // Responsive Sidebar
   useEffect(() => {
     let timeoutId;
     const handleResize = () => {
@@ -198,14 +188,14 @@ export default function Dashboard() {
 
   const handleMenuClick = (viewId) => {
     setActiveView(viewId);
-    if (window.innerWidth < 768 || ['dettaglio_pagamenti', 'finanza'].includes(viewId)) {
+    // CHIUSURA AUTOMATICA PER VISTE FINANZIARIE
+    if (window.innerWidth < 768 || ['dettaglio_pagamenti', 'finanza', 'compensi-docenti'].includes(viewId)) {
       setIsSidebarOpen(false);
     }
   };
 
   if (!user) return <div className="flex items-center justify-center h-screen bg-accademia-dark text-gray-500">Caricamento profilo...</div>;
 
-  // --- MAPPING DELLE VISTE ---
   const renderContent = () => {
     switch (activeView) {
       case 'utenti': return <UtentiList />;
@@ -218,7 +208,7 @@ export default function Dashboard() {
       case 'calendario_personale': 
       case 'calendario_docenti': return <Calendario user={user} />;
       case 'registro_lezioni': return <RegistroLezioni user={user} currentGlobalYear={currentAcademicYear} />;
-      
+      case 'compensi-docenti': return <CompensiDocenti user={user} />; 
       case 'pagamenti': return <Pagamenti user={user} currentGlobalYear={currentAcademicYear} />;
       
       case 'dettaglio_pagamenti': return <DettaglioPagamenti user={user} />;
@@ -235,10 +225,8 @@ export default function Dashboard() {
   return (
     <div className="h-screen flex bg-accademia-dark text-accademia-text font-sans overflow-hidden">
       
-      {/* SIDEBAR */}
       <aside className={`bg-accademia-card border-r border-gray-800 flex flex-col shadow-2xl z-30 transition-all duration-300 ease-in-out absolute md:relative h-full ${isSidebarOpen ? 'w-64 translate-x-0' : 'w-0 -translate-x-full md:w-0 md:translate-x-0 overflow-hidden'}`}>
         
-        {/* LOGO AREA */}
         <div className="p-6 border-b border-gray-800 flex justify-between items-center min-w-[16rem] h-28 shrink-0"> 
           <div className="flex items-center justify-center w-full pr-2"> 
               <img 
@@ -250,7 +238,6 @@ export default function Dashboard() {
           <button onClick={() => setIsSidebarOpen(false)} className="md:hidden text-gray-400 hover:text-white"><ChevronLeft size={24} /></button>
         </div>
 
-        {/* MENU LIST */}
         <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-1 custom-scrollbar min-w-[16rem]">
           {menuGroups.map((group, index) => (
               <div key={group.moduleCode} className="mb-6">
@@ -287,11 +274,9 @@ export default function Dashboard() {
         </div>
       </aside>
 
-      {/* MAIN CONTENT */}
       <main className="flex-1 flex flex-col h-screen overflow-hidden bg-accademia-dark relative w-full">
          <div className="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-gray-900 to-transparent pointer-events-none z-0"></div>
         
-        {/* TOP BAR */}
         <header className="h-16 bg-accademia-card border-b border-gray-800 flex items-center justify-between px-4 z-20 shrink-0 gap-4 relative">
           <div className="flex items-center gap-4">
             <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-gray-400 hover:text-white p-2 hover:bg-gray-800 rounded-lg transition-colors"><Menu size={24} /></button>

@@ -10,6 +10,7 @@ import ConfirmDialog from './ConfirmDialog';
 const ROLES = ['Admin', 'Gestore', 'Docente'];
 
 // --- CATALOGO VISTE DI SISTEMA ---
+// Icone aggiornate: ReceiptText per Pagamenti, Scale per Finanza, Euro per Compensi
 const SYSTEM_VIEWS = [
     { code: 'utenti', label: 'Gestione Utenti', icon: 'Users' },
     { code: 'docenti', label: 'Gestione Docenti', icon: 'GraduationCap' },
@@ -19,9 +20,10 @@ const SYSTEM_VIEWS = [
     { code: 'calendario_personale', label: 'Il Mio Calendario', icon: 'Calendar' },
     { code: 'calendario_docenti', label: 'Calendario Generale', icon: 'Calendar' },
     { code: 'registro_lezioni', label: 'Registro Lezioni', icon: 'BookOpen' },
-    { code: 'pagamenti', label: 'Gestione Pagamenti', icon: 'DollarSign' },
+    { code: 'pagamenti', label: 'Gestione Pagamenti', icon: 'ReceiptText' }, // <--- AGGIORNATO
     { code: 'dettaglio_pagamenti', label: 'Report Pagamenti', icon: 'TableProperties' },
-    { code: 'finanza', label: 'Riepilogo Finanziario', icon: 'ClipboardList' },
+    { code: 'finanza', label: 'Riepilogo Finanziario', icon: 'Scale' },      // <--- AGGIORNATO
+    { code: 'compensi-docenti', label: 'Compensi Docenti', icon: 'Euro' },   // <--- AGGIORNATO
     { code: 'configurazioni', label: 'Configurazioni App', icon: 'Settings' },
     { code: 'logs', label: 'Logs Accesso', icon: 'Shield' },
     { code: 'gestione_menu', label: 'Configurazione Menu', icon: 'LayoutDashboard' },

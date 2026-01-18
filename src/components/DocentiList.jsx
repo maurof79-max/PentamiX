@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { supabase } from '../supabaseClient';
 import { 
     Edit2, Trash2, Plus, X, Search, Smartphone, Mail, Building, 
-    Filter, ArrowUpDown, ArrowUp, ArrowDown, MapPin, BookOpen, Check 
+    Filter, ArrowUpDown, ArrowUp, ArrowDown, MapPin, BookOpen, Check, Calendar, Loader2
 } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
 
@@ -280,61 +280,112 @@ export default function DocentiList({ userRole }) {
   );
 }
 
-// --- SOSTITUISCI IL COMPONENTE ModalDocente ESISTENTE CON QUESTO ---
+// --- SOSTITUISCI IL COMPONENTE ModalDocente CON QUESTO ---
 
 function ModalDocente({ docente, schoolId, onClose, onSave }) {
     const isEdit = !!docente;
+    const [activeTab, setActiveTab] = useState('anagrafica'); // 'anagrafica' | 'competenze' | 'tariffe'
+    
+    // Form Dati Anagrafici COMPLETI
     const [formData, setFormData] = useState({
         nome: docente?.nome || '',
         cognome: docente?.cognome || '',
         email: docente?.email || '',
         cellulare: docente?.cellulare || '',
+        pec: docente?.pec || '',
+        codice_fiscale: docente?.codice_fiscale || '',
+        partita_iva: docente?.partita_iva || '',
+        indirizzo: docente?.indirizzo || '',
+        numero_civico: docente?.numero_civico || '',
+        cap: docente?.cap || '',
+        paese: docente?.paese || '',
+        provincia: docente?.provincia || '',
         strumento: docente?.strumento || '',
         stato: docente?.stato || 'Attivo',
         school_id: docente?.school_id || schoolId
     });
 
-    // Gestione Abilitazioni Lezioni
-    const [availableLezioni, setAvailableLezioni] = useState([]); // Tutte le lezioni della scuola
-    const [selectedLezioni, setSelectedLezioni] = useState([]);   // IDs selezionati
+    // Stati per Competenze
+    const [availableLezioni, setAvailableLezioni] = useState([]);
+    const [selectedLezioni, setSelectedLezioni] = useState([]);
 
+    // Stati per Tariffe
+    const [tariffe, setTariffe] = useState([]);
+    const [newTariffa, setNewTariffa] = useState({ paga_oraria: '', data_inizio: '' });
+    const [loadingTariffe, setLoadingTariffe] = useState(false);
+
+    // Caricamento Dati Iniziali
     useEffect(() => {
-        const loadDatiAccessori = async () => {
+        const loadDati = async () => {
             // 1. Carica Catalogo Lezioni della scuola
-            const { data: lezData } = await supabase
-                .from('tipi_lezioni')
-                .select('*')
-                .eq('school_id', formData.school_id)
-                .eq('attivo', true)
-                .order('tipo');
-            setAvailableLezioni(lezData || []);
+            if (formData.school_id) {
+                const { data: lezData } = await supabase
+                    .from('tipi_lezioni')
+                    .select('*')
+                    .eq('school_id', formData.school_id)
+                    .eq('attivo', true)
+                    .order('tipo');
+                setAvailableLezioni(lezData || []);
+            }
 
-            // 2. Se siamo in edit, carica le lezioni già assegnate al docente
+            // 2. Se in modifica, carica lezioni assegnate e tariffe
             if (isEdit && docente.id) {
+                // Competenze
                 const { data: assocData } = await supabase
                     .from('docenti_tipi_lezioni')
                     .select('tipo_lezione_id')
                     .eq('docente_id', docente.id);
-                
-                if (assocData) {
-                    setSelectedLezioni(assocData.map(a => a.tipo_lezione_id));
-                }
+                if (assocData) setSelectedLezioni(assocData.map(a => a.tipo_lezione_id));
+
+                // Tariffe
+                fetchTariffe();
             }
         };
-        if(formData.school_id) loadDatiAccessori();
+        loadDati();
     }, [formData.school_id, isEdit, docente]);
 
+    const fetchTariffe = async () => {
+        if (!docente?.id) return;
+        setLoadingTariffe(true);
+        const { data } = await supabase
+            .from('docenti_tariffe')
+            .select('*')
+            .eq('docente_id', docente.id)
+            .order('data_inizio', { ascending: false });
+        setTariffe(data || []);
+        setLoadingTariffe(false);
+    };
+
+    const handleAddTariffa = async () => {
+        if (!newTariffa.paga_oraria || !newTariffa.data_inizio) return alert("Inserisci importo e data");
+        
+        const { error } = await supabase.from('docenti_tariffe').insert([{
+            docente_id: docente.id, // ID testuale del docente
+            paga_oraria: parseFloat(newTariffa.paga_oraria),
+            data_inizio: newTariffa.data_inizio
+        }]);
+
+        if (error) alert("Errore inserimento tariffa: " + error.message);
+        else {
+            setNewTariffa({ paga_oraria: '', data_inizio: '' });
+            fetchTariffe();
+        }
+    };
+
+    const handleDeleteTariffa = async (id) => {
+        if(!confirm("Eliminare questa tariffa storico?")) return;
+        const { error } = await supabase.from('docenti_tariffe').delete().eq('id', id);
+        if (!error) fetchTariffe();
+    };
+
     const toggleLezione = (lezId) => {
-        setSelectedLezioni(prev => {
-            if (prev.includes(lezId)) return prev.filter(id => id !== lezId);
-            return [...prev, lezId];
-        });
+        setSelectedLezioni(prev => prev.includes(lezId) ? prev.filter(id => id !== lezId) : [...prev, lezId]);
     };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
         
-        // 1. Salva/Aggiorna Docente
+        // 1. Salva Docente
         let docenteId = docente?.id;
         const payload = { ...formData };
 
@@ -347,91 +398,248 @@ function ModalDocente({ docente, schoolId, onClose, onSave }) {
             docenteId = data.id;
         }
 
-        // 2. Aggiorna Competenze (Lezioni Abilitate)
-        // Strategia: Elimina tutto per questo docente e reinserisci i selezionati (più sicuro e veloce)
+        // 2. Salva Competenze
+        // Nota: Assicurati che docenti_tipi_lezioni accetti TEXT come docente_id se non l'hai cambiato
         await supabase.from('docenti_tipi_lezioni').delete().eq('docente_id', docenteId);
-
         if (selectedLezioni.length > 0) {
-            const assocPayload = selectedLezioni.map(lezId => ({
-                docente_id: docenteId,
-                tipo_lezione_id: lezId
-            }));
-            const { error: assocError } = await supabase.from('docenti_tipi_lezioni').insert(assocPayload);
-            if (assocError) console.error("Errore salvataggio competenze", assocError);
+            const assocPayload = selectedLezioni.map(lezId => ({ docente_id: docenteId, tipo_lezione_id: lezId }));
+            await supabase.from('docenti_tipi_lezioni').insert(assocPayload);
         }
 
-        onSave();
+        onSave("Docente salvato con successo!");
+    };
+
+    const handleChange = (field, value) => {
+        setFormData(prev => ({ ...prev, [field]: value }));
     };
 
     return createPortal(
         <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" onClick={onClose}>
-            <div className="bg-accademia-card border border-gray-700 w-full max-w-2xl rounded-xl p-6 shadow-2xl animate-in zoom-in-95 max-h-[90vh] overflow-y-auto custom-scrollbar" onClick={e => e.stopPropagation()}>
+            <div className="bg-accademia-card border border-gray-700 w-full max-w-4xl rounded-xl p-6 shadow-2xl animate-in zoom-in-95 max-h-[95vh] overflow-y-auto custom-scrollbar" onClick={e => e.stopPropagation()}>
                 
-                <div className="flex justify-between mb-4 border-b border-gray-800 pb-2">
-                    <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                        {isEdit ? <Edit2 size={20}/> : <UserPlus size={20}/>} 
-                        {isEdit ? 'Modifica Docente' : 'Nuovo Docente'}
-                    </h3>
+                <div className="flex justify-between items-start mb-6 border-b border-gray-800 pb-4">
+                    <div>
+                        <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                            {isEdit ? <Edit2 size={20}/> : <Plus size={20}/>} 
+                            {isEdit ? 'Modifica Docente' : 'Nuovo Docente'}
+                        </h3>
+                        {isEdit && <p className="text-xs text-gray-500 mt-1">Gestisci anagrafica completa, competenze e compensi.</p>}
+                    </div>
                     <button onClick={onClose}><X className="text-gray-400 hover:text-white"/></button>
                 </div>
 
-                <form onSubmit={handleSubmit} className="space-y-6">
+                {/* TABS HEADER */}
+                <div className="flex gap-6 mb-6 border-b border-gray-800">
+                    {['anagrafica', 'competenze', 'tariffe'].map(tab => (
+                        <button 
+                            key={tab}
+                            onClick={() => setActiveTab(tab)}
+                            className={`pb-3 text-sm font-bold transition-all border-b-2 capitalize ${
+                                activeTab === tab 
+                                ? 'text-accademia-red border-accademia-red' 
+                                : 'text-gray-500 border-transparent hover:text-white'
+                            }`}
+                        >
+                            {tab === 'tariffe' && !isEdit ? <span className="opacity-50 cursor-not-allowed">Compensi & Tariffe</span> : 
+                             tab === 'tariffe' ? 'Compensi & Tariffe' : 
+                             tab === 'competenze' ? 'Competenze Didattiche' : tab}
+                        </button>
+                    ))}
+                </div>
+
+                <form onSubmit={handleSubmit}>
                     
-                    {/* DATI ANAGRAFICI */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Nome *</label><input type="text" value={formData.nome} onChange={e => setFormData({...formData, nome: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:outline-none focus:border-accademia-red" required /></div>
-                        <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Cognome *</label><input type="text" value={formData.cognome} onChange={e => setFormData({...formData, cognome: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:outline-none focus:border-accademia-red" required /></div>
-                        <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Email</label><input type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:outline-none focus:border-accademia-red" /></div>
-                        <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Cellulare</label><input type="tel" value={formData.cellulare} onChange={e => setFormData({...formData, cellulare: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:outline-none focus:border-accademia-red" /></div>
-                        <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Strumento/Materia</label><input type="text" value={formData.strumento} onChange={e => setFormData({...formData, strumento: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:outline-none focus:border-accademia-red" placeholder="Es. Pianoforte" /></div>
-                    </div>
-
-                    {/* SEZIONE COMPETENZE / LEZIONI ABILITATE */}
-                    <div className="pt-4 border-t border-gray-800">
-                        <label className="block text-sm font-bold text-accademia-red uppercase mb-3 flex items-center gap-2">
-                            <BookOpen size={16}/> Competenze Didattiche (Lezioni Abilitate)
-                        </label>
-                        
-                        {availableLezioni.length === 0 ? (
-                            <p className="text-xs text-gray-500 italic">Nessuna tipologia di lezione attiva in questa scuola.</p>
-                        ) : (
-                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 bg-gray-900/30 p-4 rounded-xl border border-gray-800 max-h-48 overflow-y-auto custom-scrollbar">
-                                {availableLezioni.map(lez => {
-                                    const isSelected = selectedLezioni.includes(lez.id);
-                                    return (
-                                        <div 
-                                            key={lez.id} 
-                                            onClick={() => toggleLezione(lez.id)}
-                                            className={`flex items-center gap-3 p-2 rounded-lg border cursor-pointer transition-all select-none ${
-                                                isSelected 
-                                                ? 'bg-accademia-red/20 border-accademia-red shadow-[0_0_10px_rgba(220,38,38,0.2)]' 
-                                                : 'bg-gray-800/50 border-gray-700 hover:border-gray-500'
-                                            }`}
-                                        >
-                                            <div className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-colors ${
-                                                isSelected ? 'bg-accademia-red border-accademia-red' : 'border-gray-500'
-                                            }`}>
-                                                {isSelected && <Check size={14} className="text-white" strokeWidth={4} />}
-                                            </div>
-                                            <div className="flex flex-col overflow-hidden">
-                                                <span className={`text-xs font-bold truncate ${isSelected ? 'text-white' : 'text-gray-400'}`}>
-                                                    {lez.tipo}
-                                                </span>
-                                                <span className="text-[10px] text-gray-600">{lez.durata_minuti} min</span>
-                                            </div>
-                                        </div>
-                                    )
-                                })}
+                    {/* TAB: ANAGRAFICA COMPLETA */}
+                    {activeTab === 'anagrafica' && (
+                        <div className="space-y-6 animate-in fade-in slide-in-from-left-2">
+                            
+                            {/* Sezione Principale */}
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Nome *</label><input type="text" value={formData.nome} onChange={e => handleChange('nome', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" required /></div>
+                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Cognome *</label><input type="text" value={formData.cognome} onChange={e => handleChange('cognome', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" required /></div>
+                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Stato</label>
+                                    <select value={formData.stato} onChange={e => handleChange('stato', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none">
+                                        <option value="Attivo">Attivo</option>
+                                        <option value="Inattivo">Inattivo</option>
+                                    </select>
+                                </div>
                             </div>
-                        )}
-                        <p className="text-[10px] text-gray-500 mt-2">
-                            * Seleziona le tipologie di lezione che questo docente può inserire nel calendario.
-                        </p>
-                    </div>
 
-                    <div className="flex justify-end gap-3 pt-4 border-t border-gray-800">
-                        <button type="button" onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white">Annulla</button>
-                        <button type="submit" className="bg-accademia-red hover:bg-red-700 text-white px-6 py-2 rounded-lg font-bold shadow-lg">Salva Docente</button>
+                            {/* Contatti e Dati Professionali */}
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Email</label><input type="email" value={formData.email} onChange={e => handleChange('email', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" /></div>
+                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Cellulare</label><input type="tel" value={formData.cellulare} onChange={e => handleChange('cellulare', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" /></div>
+                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">PEC</label><input type="email" value={formData.pec} onChange={e => handleChange('pec', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" /></div>
+                            </div>
+                            
+                            {/* Dati Fiscali */}
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-gray-900/30 p-3 rounded-lg border border-gray-800">
+                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Codice Fiscale</label><input type="text" value={formData.codice_fiscale} onChange={e => handleChange('codice_fiscale', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" /></div>
+                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Partita IVA</label><input type="text" value={formData.partita_iva} onChange={e => handleChange('partita_iva', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" /></div>
+                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Strumento</label><input type="text" value={formData.strumento} onChange={e => handleChange('strumento', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" placeholder="Es. Chitarra" /></div>
+                            </div>
+
+                            {/* Indirizzo Completo */}
+                            <div className="bg-gray-900/30 p-3 rounded-lg border border-gray-800">
+                                <h4 className="text-xs font-bold text-gray-500 uppercase mb-3">Indirizzo di Residenza</h4>
+                                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                    <div className="md:col-span-3"><label className="block text-[10px] text-gray-400 uppercase mb-1">Via / Piazza</label><input type="text" value={formData.indirizzo} onChange={e => handleChange('indirizzo', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" /></div>
+                                    <div><label className="block text-[10px] text-gray-400 uppercase mb-1">N. Civico</label><input type="text" value={formData.numero_civico} onChange={e => handleChange('numero_civico', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" /></div>
+                                    <div><label className="block text-[10px] text-gray-400 uppercase mb-1">CAP</label><input type="text" value={formData.cap} onChange={e => handleChange('cap', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" /></div>
+                                    <div><label className="block text-[10px] text-gray-400 uppercase mb-1">Città / Paese</label><input type="text" value={formData.paese} onChange={e => handleChange('paese', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" /></div>
+                                    <div><label className="block text-[10px] text-gray-400 uppercase mb-1">Provincia</label><input type="text" value={formData.provincia} onChange={e => handleChange('provincia', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" /></div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* TAB: COMPETENZE */}
+                    {activeTab === 'competenze' && (
+                        <div className="space-y-4 animate-in fade-in slide-in-from-right-2">
+                            <div className="flex items-center justify-between">
+                                <p className="text-xs text-gray-400">Seleziona le tipologie di lezione che questo docente è abilitato a svolgere.</p>
+                                <span className="text-xs bg-accademia-red/10 text-accademia-red px-2 py-1 rounded border border-accademia-red/20">Selezionate: {selectedLezioni.length}</span>
+                            </div>
+                            
+                            {availableLezioni.length === 0 ? (
+                                <p className="text-sm text-yellow-500 bg-yellow-900/10 p-4 rounded border border-yellow-900/30 text-center">Nessuna lezione configurata nella scuola.</p>
+                            ) : (
+                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 max-h-[400px] overflow-y-auto custom-scrollbar p-1">
+                                    {availableLezioni.map(lez => {
+                                        const isSelected = selectedLezioni.includes(lez.id);
+                                        return (
+                                            <div 
+                                                key={lez.id} 
+                                                onClick={() => toggleLezione(lez.id)}
+                                                className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all select-none group ${
+                                                    isSelected 
+                                                    ? 'bg-accademia-red/20 border-accademia-red shadow-md' 
+                                                    : 'bg-gray-800/50 border-gray-700 hover:border-gray-500 hover:bg-gray-800'
+                                                }`}
+                                            >
+                                                <div className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-colors ${isSelected ? 'bg-accademia-red border-accademia-red' : 'border-gray-500 group-hover:border-gray-400'}`}>
+                                                    {isSelected && <Check size={14} className="text-white" strokeWidth={3} />}
+                                                </div>
+                                                <div className="overflow-hidden">
+                                                    <span className={`block text-xs font-bold truncate ${isSelected ? 'text-white' : 'text-gray-400 group-hover:text-gray-200'}`}>{lez.tipo}</span>
+                                                    <span className="text-[10px] text-gray-600 block">{lez.durata_minuti} min</span>
+                                                </div>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* TAB: TARIFFE */}
+                    {activeTab === 'tariffe' && (
+                        <div className="space-y-6 animate-in fade-in slide-in-from-right-2">
+                             {!isEdit ? (
+                                <div className="text-center py-10 text-gray-500">
+                                    Salva prima il docente per gestire le tariffe.
+                                </div>
+                            ) : (
+                                <>
+                                    <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700 shadow-lg">
+                                        <h4 className="text-sm font-bold text-white mb-4 flex items-center gap-2">
+                                            <Plus size={16} className="text-accademia-red"/> Nuova Tariffa Oraria
+                                        </h4>
+                                        <div className="flex gap-4 items-end">
+                                            <div className="flex-1">
+                                                <label className="block text-[10px] text-gray-400 uppercase mb-1">Paga Oraria (€)</label>
+                                                <div className="relative">
+                                                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">€</span>
+                                                    <input 
+                                                        type="number" 
+                                                        step="0.50" 
+                                                        placeholder="0.00" 
+                                                        className="w-full bg-accademia-input border border-gray-600 rounded p-2 pl-7 text-white text-sm focus:border-accademia-red focus:outline-none"
+                                                        value={newTariffa.paga_oraria}
+                                                        onChange={e => setNewTariffa({...newTariffa, paga_oraria: e.target.value})}
+                                                    />
+                                                </div>
+                                            </div>
+                                            <div className="flex-1">
+                                                <label className="block text-[10px] text-gray-400 uppercase mb-1">Valida dal</label>
+                                                <input 
+                                                    type="date" 
+                                                    className="w-full bg-accademia-input border border-gray-600 rounded p-2 text-white text-sm focus:border-accademia-red focus:outline-none"
+                                                    value={newTariffa.data_inizio}
+                                                    onChange={e => setNewTariffa({...newTariffa, data_inizio: e.target.value})}
+                                                />
+                                            </div>
+                                            <button 
+                                                type="button" 
+                                                onClick={handleAddTariffa}
+                                                className="bg-green-700 hover:bg-green-600 text-white p-2 rounded-md h-[38px] px-6 font-bold text-sm shadow-md transition-colors"
+                                            >
+                                                Aggiungi
+                                            </button>
+                                        </div>
+                                        <p className="text-[10px] text-gray-500 mt-3 flex items-center gap-1">
+                                            <span className="text-accademia-red">*</span> La tariffa sarà applicata a tutte le lezioni svolte a partire dalla data indicata.
+                                        </p>
+                                    </div>
+
+                                    <div>
+                                        <h4 className="text-sm font-bold text-gray-400 uppercase mb-3 px-1">Storico Tariffe</h4>
+                                        {loadingTariffe ? (
+                                            <div className="flex items-center gap-2 text-gray-500 text-sm p-4"><Loader2 className="animate-spin" size={16}/> Caricamento...</div>
+                                        ) : tariffe.length === 0 ? (
+                                            <div className="text-sm text-yellow-500 italic p-4 bg-yellow-900/10 border border-yellow-900/30 rounded text-center">
+                                                Nessuna tariffa impostata. <br/>Il compenso calcolato per le lezioni sarà 0 €.
+                                            </div>
+                                        ) : (
+                                            <div className="border border-gray-800 rounded-lg overflow-hidden">
+                                                <table className="w-full text-left text-sm">
+                                                    <thead className="text-xs text-gray-500 uppercase bg-gray-900">
+                                                        <tr>
+                                                            <th className="p-3">Data Inizio Validità</th>
+                                                            <th className="p-3">Paga Oraria</th>
+                                                            <th className="p-3 text-right">Azioni</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-gray-800 bg-gray-900/20">
+                                                        {tariffe.map(t => (
+                                                            <tr key={t.id} className="hover:bg-gray-800/50 transition-colors">
+                                                                <td className="p-3 text-gray-300">
+                                                                    <div className="flex items-center gap-2">
+                                                                        <Calendar size={14} className="text-gray-600"/>
+                                                                        {new Date(t.data_inizio).toLocaleDateString('it-IT')}
+                                                                    </div>
+                                                                </td>
+                                                                <td className="p-3 text-white font-mono font-bold text-base">
+                                                                    € {t.paga_oraria.toFixed(2)}
+                                                                </td>
+                                                                <td className="p-3 text-right">
+                                                                    <button 
+                                                                        type="button" 
+                                                                        onClick={() => handleDeleteTariffa(t.id)}
+                                                                        className="text-gray-500 hover:text-red-400 p-1.5 rounded-md hover:bg-red-900/20 transition-colors"
+                                                                        title="Elimina Tariffa"
+                                                                    >
+                                                                        <Trash2 size={16}/>
+                                                                    </button>
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        )}
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    )}
+
+                    {/* FOOTER ACTIONS */}
+                    <div className="flex justify-end gap-3 pt-6 border-t border-gray-800 mt-6">
+                        <button type="button" onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white text-sm transition-colors">Annulla</button>
+                        <button type="submit" className="bg-accademia-red hover:bg-red-700 text-white px-6 py-2 rounded-lg font-bold shadow-lg text-sm transition-all hover:shadow-red-900/20">
+                            {isEdit ? 'Salva Modifiche' : 'Crea Docente'}
+                        </button>
                     </div>
                 </form>
             </div>

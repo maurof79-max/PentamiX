@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { supabase } from '../supabaseClient';
-import { Plus, X, Edit2, Trash2, Search, ArrowUpDown, AlertTriangle } from 'lucide-react';
+import { Plus, X, Edit2, Trash2, Search, ArrowUpDown, AlertTriangle, Users, User, Loader2 } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
 
 // --- IMPORT CENTRALIZZATO ---
@@ -16,7 +16,7 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
   const [activeYears, setActiveYears] = useState([]); 
   
   const [docenti, setDocenti] = useState([]);
-  const [alunni, setAlunni] = useState([]);
+  const [alunni, setAlunni] = useState([]); // Alunni globali per i filtri
   
   const [tariffeAnno, setTariffeAnno] = useState([]); 
 
@@ -66,7 +66,7 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
     }
   }, [currentGlobalYear, user.ruolo]);
 
-  // --- 3. Carica Risorse (Docenti/Alunni) ---
+  // --- 3. Carica Risorse (Docenti/Alunni per i FILTRI) ---
   useEffect(() => {
     const fetchResources = async () => {
       // Docenti (Solo se non è docente)
@@ -86,7 +86,7 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
         setDocenti(docentiFormatted);
       }
 
-      // Alunni
+      // Alunni (Per i FILTRI della tabella principale, carichiamo tutti)
       let alunniList = [];
       if (user.ruolo === 'Docente') {
           // Docente vede solo i suoi associati
@@ -135,14 +135,13 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
       const startDate = `${startYear}-09-01`;
       const endDate = `${endYear}-08-31`;
 
-      // NOTA: Usiamo 'docenti!inner' per poter filtrare sulla tabella collegata (school_id)
       let query = supabase
         .from('registro')
         .select(`
-          id, data_lezione, convalidato, anno_accademico,
+          id, data_lezione, convalidato, anno_accademico, contabilizza_docente, tipo_lezione_id,
           docenti!inner ( id, nome, cognome, school_id ),
           alunni ( id, nome, cognome ),
-          tipi_lezioni ( tipo, costo )
+          tipi_lezioni ( id, tipo, costo, modalita )
         `)
         .gte('data_lezione', startDate)
         .lte('data_lezione', endDate);
@@ -151,8 +150,6 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
           query = query.eq('docente_id', user.id_collegato);
       } else {
           if (filters.docente_id) query = query.eq('docente_id', filters.docente_id);
-          
-          // FILTRO GESTORE: Visualizza solo lezioni di docenti della propria scuola
           if (user.school_id) {
               query = query.eq('docenti.school_id', user.school_id);
           }
@@ -257,35 +254,88 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
     });
   }, [lezioni, sortConfig]);
 
+  // --- DELETE LOGIC ---
   const handleDeleteClick = async (row) => {
     const hasPermission = await checkPermission(row.anno_accademico);
     if (!hasPermission) return;
 
-    setConfirmDialog({
-      isOpen: true,
-      type: 'danger',
-      title: 'Elimina Lezione',
-      message: `Sei sicuro di voler eliminare questa lezione?\n\nData: ${new Date(row.data_lezione).toLocaleDateString('it-IT')}\nAlunno: ${row.alunni?.cognome} ${row.alunni?.nome}\n\nQuesta azione non può essere annullata.`,
-      confirmText: 'Elimina',
-      cancelText: 'Annulla',
-      showCancel: true,
-      onConfirm: async () => {
-        const { error } = await supabase.from('registro').delete().eq('id', row.id);
-        if (error) {
-          setConfirmDialog({
-            isOpen: true,
-            type: 'danger',
-            title: 'Errore',
-            message: 'Errore durante l\'eliminazione: ' + error.message,
-            confirmText: 'OK',
-            showCancel: false,
-            onConfirm: () => setConfirmDialog(prev => ({ ...prev, isOpen: false }))
-          });
-        } else {
-          fetchLezioni();
-          setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+    const isCollettiva = row.tipi_lezioni?.modalita === 'Collettiva';
+    
+    const executeDelete = async (mode) => {
+        try {
+            if (mode === 'ALL') {
+                const { error } = await supabase
+                    .from('registro')
+                    .delete()
+                    .eq('docente_id', row.docenti.id)
+                    .eq('data_lezione', row.data_lezione)
+                    .eq('tipo_lezione_id', row.tipo_lezione_id);
+
+                if (error) throw error;
+            } else {
+                if (row.contabilizza_docente && isCollettiva) {
+                    const { data: siblings } = await supabase
+                        .from('registro')
+                        .select('id')
+                        .eq('docente_id', row.docenti.id)
+                        .eq('data_lezione', row.data_lezione)
+                        .eq('tipo_lezione_id', row.tipo_lezione_id)
+                        .neq('id', row.id)
+                        .limit(1);
+
+                    if (siblings && siblings.length > 0) {
+                        const { error: updateError } = await supabase
+                            .from('registro')
+                            .update({ contabilizza_docente: true })
+                            .eq('id', siblings[0].id);
+                        if (updateError) throw updateError;
+                    }
+                }
+                const { error } = await supabase.from('registro').delete().eq('id', row.id);
+                if (error) throw error;
+            }
+
+            fetchLezioni();
+            setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+        } catch (err) {
+            alert("Errore eliminazione: " + err.message);
         }
-      }
+    };
+
+    if (isCollettiva) {
+        const { count } = await supabase
+            .from('registro')
+            .select('*', { count: 'exact', head: true })
+            .eq('docente_id', row.docenti.id)
+            .eq('data_lezione', row.data_lezione)
+            .eq('tipo_lezione_id', row.tipo_lezione_id);
+        
+        if (count > 1) {
+            setConfirmDialog({
+                isOpen: true,
+                type: 'warning',
+                title: 'Eliminazione Lezione di Gruppo',
+                message: `Questa è una lezione di gruppo con ${count} partecipanti.\n\nCome vuoi procedere?`,
+                confirmText: 'Elimina TUTTI',
+                cancelText: 'Solo questo Alunno',
+                showCancel: true,
+                onConfirm: () => executeDelete('ALL'),
+                onCancel: () => executeDelete('SINGLE') 
+            });
+            return;
+        }
+    }
+
+    setConfirmDialog({
+        isOpen: true,
+        type: 'danger',
+        title: 'Elimina Lezione',
+        message: `Sei sicuro di voler eliminare questa lezione?\n\nAlunno: ${row.alunni?.cognome} ${row.alunni?.nome}`,
+        confirmText: 'Elimina',
+        cancelText: 'Annulla',
+        showCancel: true,
+        onConfirm: () => executeDelete('SINGLE'),
+        onCancel: () => setConfirmDialog(prev => ({ ...prev, isOpen: false }))
     });
   };
 
@@ -361,6 +411,7 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
           <thead className="bg-gray-900/50 text-gray-400 uppercase text-xs sticky top-0 backdrop-blur-sm z-10">
             <tr>
               <th className="px-6 py-3 cursor-pointer hover:text-white" onClick={()=>handleSort('data_lezione')}>Data <ArrowUpDown size={12} className="inline"/></th>
+              <th className="px-6 py-3 text-center">Modalità</th> 
               <th className="px-6 py-3 cursor-pointer hover:text-white" onClick={()=>handleSort('docente')}>Docente <ArrowUpDown size={12} className="inline"/></th>
               <th className="px-6 py-3 cursor-pointer hover:text-white" onClick={()=>handleSort('alunno')}>Alunno <ArrowUpDown size={12} className="inline"/></th>
               <th className="px-6 py-3 cursor-pointer hover:text-white" onClick={()=>handleSort('tipo')}>Lezione <ArrowUpDown size={12} className="inline"/></th>
@@ -368,11 +419,24 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800">
-            {loading ? <tr><td colSpan="5" className="p-8 text-center text-gray-500">Caricamento...</td></tr> : 
-             sortedLezioni.length === 0 ? <tr><td colSpan="5" className="p-8 text-center text-gray-500">Nessuna lezione trovata.</td></tr> :
+            {loading ? <tr><td colSpan="6" className="p-8 text-center text-gray-500">Caricamento...</td></tr> : 
+             sortedLezioni.length === 0 ? <tr><td colSpan="6" className="p-8 text-center text-gray-500">Nessuna lezione trovata.</td></tr> :
              sortedLezioni.map(row => (
                 <tr key={row.id} className="hover:bg-gray-800/30 transition-colors group">
                   <td className="px-6 py-3 font-mono text-gray-300">{new Date(row.data_lezione).toLocaleDateString('it-IT')}</td>
+                  
+                  <td className="px-6 py-3 text-center">
+                    {row.tipi_lezioni?.modalita === 'Collettiva' ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold bg-yellow-500/10 text-yellow-500 border border-yellow-500/20">
+                            <Users size={12} /> Gruppo
+                        </span>
+                    ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20 opacity-70">
+                            <User size={12} /> Singolo
+                        </span>
+                    )}
+                  </td>
+
                   <td className="px-6 py-3 text-white">{row.docenti?.cognome} {row.docenti?.nome}</td>
                   <td className="px-6 py-3 font-medium text-white">{row.alunni?.cognome} {row.alunni?.nome}</td>
                   <td className="px-6 py-3 text-gray-400">
@@ -394,7 +458,7 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
         <ModalRegistro 
           lezione={editingLezione} 
           docenti={docenti}
-          alunni={alunni}
+          alunni={alunni} // Passiamo l'array globale, ma nel modale useremo quello filtrato
           tariffe={tariffeAnno}
           user={user}
           anno={filters.anno} 
@@ -412,7 +476,7 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
         cancelText={confirmDialog.cancelText}
         showCancel={confirmDialog.showCancel}
         onConfirm={confirmDialog.onConfirm}
-        onCancel={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
+        onCancel={confirmDialog.onCancel} 
       />
     </div>
   );
@@ -430,8 +494,51 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
 
   const [filteredTariffe, setFilteredTariffe] = useState([]);
   const [loadingTariffe, setLoadingTariffe] = useState(false);
+  const [isCollettiva, setIsCollettiva] = useState(false);
+  const [selectedAlunniIds, setSelectedAlunniIds] = useState([]);
+  const [lessonModes, setLessonModes] = useState({});
+  
+  // STATI PER IL FILTRO ALUNNI DINAMICO
+  const [filteredAlunni, setFilteredAlunni] = useState([]);
+  const [loadingAlunni, setLoadingAlunni] = useState(false);
 
-  // EFFETTO: Filtra Tariffe in base alle competenze del Docente
+  // 1. CARICAMENTO ALUNNI FILTRATI PER DOCENTE
+  useEffect(() => {
+    const fetchAlunniByDocente = async () => {
+        // Se non c'è docente selezionato, lista vuota
+        if (!formData.docente_id) {
+            setFilteredAlunni([]);
+            return;
+        }
+
+        // Se sono Docente, la lista passata come prop 'alunni' è già filtrata dal parent
+        if (user.ruolo === 'Docente') {
+            setFilteredAlunni(alunni);
+            return;
+        }
+
+        // Se sono Admin/Gestore, devo fare fetch delle associazioni per questo docente
+        setLoadingAlunni(true);
+        const { data } = await supabase
+            .from('associazioni')
+            .select('alunni(id, nome, cognome)')
+            .eq('docente_id', formData.docente_id);
+
+        if (data) {
+            const mapped = data.map(item => item.alunni).filter(Boolean);
+            mapped.sort((a, b) => (a.cognome || '').localeCompare(b.cognome || ''));
+            setFilteredAlunni(mapped);
+        } else {
+            setFilteredAlunni([]);
+        }
+        setLoadingAlunni(false);
+    };
+
+    fetchAlunniByDocente();
+  }, [formData.docente_id, alunni, user.ruolo]);
+
+
+  // 2. FILTRA TARIFFE & CHECK MODALITA'
   useEffect(() => {
     const filterTariffeByDocente = async () => {
       if (!formData.docente_id) {
@@ -442,15 +549,22 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
       
       const { data: competenze, error } = await supabase
         .from('docenti_tipi_lezioni')
-        .select(`tipi_lezioni ( tipo )`)
+        .select(`tipi_lezioni ( tipo, modalita )`)
         .eq('docente_id', formData.docente_id);
 
       if (error) {
         console.error("Errore recupero competenze docente:", error);
-        setFilteredTariffe(tariffe); // Fallback: mostra tutto
+        setFilteredTariffe(tariffe); 
       } else {
         const allowedTypes = competenze?.map(c => c.tipi_lezioni?.tipo) || [];
-        // Filtra le tariffe (tariffe.tipo_lezione deve matchare con tipi_lezioni.tipo)
+        const modesMap = {};
+        competenze?.forEach(c => {
+            if(c.tipi_lezioni) {
+                modesMap[c.tipi_lezioni.tipo] = c.tipi_lezioni.modalita || 'Individuale';
+            }
+        });
+        setLessonModes(modesMap);
+
         const filtered = tariffe.filter(t => allowedTypes.includes(t.tipo_lezione));
         setFilteredTariffe(filtered);
       }
@@ -459,8 +573,31 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
 
     if (!formData.id) {
         filterTariffeByDocente();
+    } else {
+        // In modifica, setta isCollettiva in base al record caricato
+        if (lezione?.tipi_lezioni?.modalita === 'Collettiva') {
+            setIsCollettiva(true);
+        }
+        // In modifica (Admin) serve comunque caricare gli alunni associati per poter cambiare studente
+        // Ma attenzione: l'alunno attuale potrebbe NON essere più associato. 
+        // Per semplicità ricarichiamo gli associati. Se l'attuale non c'è, sarà gestito dalla select value.
     }
   }, [formData.docente_id, tariffe, formData.id]);
+
+  const handleTipoChange = (e) => {
+      const selectedId = e.target.value;
+      setFormData({...formData, tipo_lezione_id: selectedId});
+      
+      const tariffa = tariffe.find(t => String(t.id) === String(selectedId));
+      if (tariffa) {
+          const mode = lessonModes[tariffa.tipo_lezione];
+          setIsCollettiva(mode === 'Collettiva');
+          setSelectedAlunniIds([]);
+          setFormData(prev => ({ ...prev, alunno_id: '', tipo_lezione_id: selectedId }));
+      } else {
+          setIsCollettiva(false);
+      }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -469,19 +606,14 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
       let tipoLezioneId = formData.tipo_lezione_id;
 
       if (!formData.id) {
-        if (!formData.tipo_lezione_id) {
-          alert("Seleziona un tipo di lezione");
-          return;
-        }
+        if (!formData.tipo_lezione_id) return alert("Seleziona un tipo di lezione");
+
+        if (isCollettiva && selectedAlunniIds.length === 0) return alert("Seleziona almeno un alunno per la lezione di gruppo.");
+        if (!isCollettiva && !formData.alunno_id) return alert("Seleziona un alunno.");
         
         const tariffaSelezionata = tariffe.find(t => String(t.id) === String(formData.tipo_lezione_id));
-        
-        if (!tariffaSelezionata) {
-          alert("Errore: tariffa non trovata. Riprova.");
-          return;
-        }
+        if (!tariffaSelezionata) return alert("Errore: tariffa non trovata.");
 
-        // Cerca se esiste già il tipo_lezione nella tabella 'tipi_lezioni' con quel costo
         const { data: existingTipo, error: searchError } = await supabase
           .from('tipi_lezioni')
           .select('id')
@@ -494,7 +626,6 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
         if (existingTipo) {
           tipoLezioneId = existingTipo.id;
         } else {
-          // Crea nuovo tipo lezione se manca
           const newTipoId = 'TL' + Date.now();
           const { error: insertTipoError } = await supabase
             .from('tipi_lezioni')
@@ -503,17 +634,19 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
               tipo: tariffaSelezionata.tipo_lezione,
               costo: tariffaSelezionata.costo,
               durata_minuti: 60,
+              modalita: isCollettiva ? 'Collettiva' : 'Individuale', 
               school_id: user.school_id
             }]);
 
           if (insertTipoError) throw insertTipoError;
           tipoLezioneId = newTipoId;
         }
+      } else {
+          tipoLezioneId = lezione.tipo_lezione_id;
       }
 
-      const payload = {
+      const basePayload = {
         docente_id: formData.docente_id,
-        alunno_id: formData.alunno_id,
         tipo_lezione_id: tipoLezioneId,
         data_lezione: formData.data_lezione,
         anno_accademico: anno, 
@@ -521,12 +654,58 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
       };
 
       if (formData.id) {
-        const { error } = await supabase.from('registro').update(payload).eq('id', formData.id);
-        if (error) throw error;
+        // --- MODIFICA ---
+        if (isCollettiva) {
+            const oldData = lezione.data_lezione.slice(0, 10);
+            const newData = formData.data_lezione;
+
+            if (oldData !== newData) {
+                const confirmUpdate = window.confirm(`Hai modificato la data della lezione.\nVuoi spostare TUTTI i partecipanti di questo gruppo al ${new Date(newData).toLocaleDateString()}?`);
+                
+                if (confirmUpdate) {
+                    const { error } = await supabase
+                        .from('registro')
+                        .update({ data_lezione: newData })
+                        .eq('docente_id', lezione.docenti.id)
+                        .eq('data_lezione', lezione.data_lezione) 
+                        .eq('tipo_lezione_id', lezione.tipo_lezione_id);
+                    if (error) throw error;
+                } else {
+                   const { error } = await supabase.from('registro').update({ ...basePayload, alunno_id: formData.alunno_id }).eq('id', formData.id);
+                   if (error) throw error;
+                }
+            } else {
+                 const { error } = await supabase.from('registro').update({ ...basePayload, alunno_id: formData.alunno_id }).eq('id', formData.id);
+                 if (error) throw error;
+            }
+        } else {
+            const { error } = await supabase.from('registro').update({ ...basePayload, alunno_id: formData.alunno_id }).eq('id', formData.id);
+            if (error) throw error;
+        }
+
       } else {
-        const newId = 'R' + Date.now();
-        const { error } = await supabase.from('registro').insert([{ ...payload, id: newId }]);
-        if (error) throw error;
+        // --- NUOVO ---
+        if (isCollettiva) {
+            const rowsToInsert = selectedAlunniIds.map((alunnoId, index) => ({
+                id: 'R' + Date.now() + index, 
+                ...basePayload,
+                alunno_id: alunnoId,
+                contabilizza_docente: index === 0 ? true : false 
+            }));
+
+            const { error } = await supabase.from('registro').insert(rowsToInsert);
+            if (error) throw error;
+
+        } else {
+            const newId = 'R' + Date.now();
+            const { error } = await supabase.from('registro').insert([{ 
+                id: newId, 
+                ...basePayload, 
+                alunno_id: formData.alunno_id,
+                contabilizza_docente: true 
+            }]);
+            if (error) throw error;
+        }
       }
       
       onSave();
@@ -554,6 +733,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
                 value={formData.docente_id} 
                 onChange={e=>{
                     setFormData({...formData, docente_id:e.target.value, tipo_lezione_id: ''}); 
+                    setIsCollettiva(false);
                 }} 
                 className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" 
                 required
@@ -565,20 +745,6 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
             </div>
           )}
           
-          {/* SELEZIONE ALUNNO */}
-          <div>
-            <label className="block text-xs text-gray-400 uppercase mb-1">Alunno</label>
-            <select 
-              value={formData.alunno_id} 
-              onChange={e=>setFormData({...formData,alunno_id:e.target.value})} 
-              className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" 
-              required
-            >
-              <option value="">Seleziona...</option>
-              {alunni.map(a=><option key={a.id} value={a.id}>{a.cognome} {a.nome}</option>)}
-            </select>
-          </div>
-          
           {/* SELEZIONE TIPO LEZIONE */}
           <div>
             <label className="block text-xs text-gray-400 uppercase mb-1">
@@ -588,7 +754,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
               <>
                 <select 
                   value={formData.tipo_lezione_id} 
-                  onChange={e=>setFormData({...formData,tipo_lezione_id:e.target.value})} 
+                  onChange={handleTipoChange} 
                   className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" 
                   required
                   disabled={!formData.docente_id || loadingTariffe}
@@ -611,10 +777,61 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
                 )}
               </>
             ) : (
-              // IN MODIFICA (READ ONLY)
-              <div className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-gray-400 cursor-not-allowed">
-                {lezione?.tipi_lezioni?.tipo || 'N/A'}
+              <div className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-gray-400 cursor-not-allowed flex justify-between items-center">
+                <span>{lezione?.tipi_lezioni?.tipo || 'N/A'}</span>
+                {isCollettiva && <span className="text-yellow-500 text-xs flex items-center gap-1"><Users size={12}/> Gruppo</span>}
               </div>
+            )}
+          </div>
+
+          {/* SELEZIONE ALUNNO / ALUNNI */}
+          <div>
+            <label className="block text-xs text-gray-400 uppercase mb-1 flex items-center justify-between">
+                <span>{isCollettiva && !formData.id ? 'Partecipanti (Lezione di Gruppo)' : 'Alunno'}</span>
+                {isCollettiva && !formData.id && <span className="text-[10px] text-yellow-500 flex items-center gap-1"><Users size={10}/> Seleziona multipli</span>}
+                {loadingAlunni && <Loader2 size={12} className="animate-spin text-gray-400"/>}
+            </label>
+            
+            {/* USO filteredAlunni INVECE DI alunni */}
+            {!isCollettiva || formData.id ? (
+                <select 
+                    value={formData.alunno_id} 
+                    onChange={e=>setFormData({...formData,alunno_id:e.target.value})} 
+                    className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" 
+                    required
+                    disabled={!formData.docente_id || loadingAlunni}
+                >
+                    <option value="">
+                        {!formData.docente_id ? "Seleziona prima un docente..." : "Seleziona..."}
+                    </option>
+                    {filteredAlunni.map(a=><option key={a.id} value={a.id}>{a.cognome} {a.nome}</option>)}
+                </select>
+            ) : (
+                <div className="bg-accademia-input border border-gray-700 rounded p-2 max-h-48 overflow-y-auto custom-scrollbar">
+                    {filteredAlunni.length === 0 ? <span className="text-gray-500 text-sm">Nessun alunno associato</span> : 
+                     filteredAlunni.map(a => (
+                        <label key={a.id} className="flex items-center gap-2 p-1.5 hover:bg-gray-700 rounded cursor-pointer transition-colors">
+                            <input 
+                                type="checkbox"
+                                checked={selectedAlunniIds.includes(a.id)}
+                                onChange={(e) => {
+                                    if(e.target.checked) setSelectedAlunniIds([...selectedAlunniIds, a.id]);
+                                    else setSelectedAlunniIds(selectedAlunniIds.filter(id => id !== a.id));
+                                }}
+                                className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-accademia-red focus:ring-accademia-red"
+                            />
+                            <span className={`text-sm ${selectedAlunniIds.includes(a.id) ? 'text-white font-bold' : 'text-gray-300'}`}>
+                                {a.cognome} {a.nome}
+                            </span>
+                        </label>
+                    ))}
+                </div>
+            )}
+            
+            {isCollettiva && !formData.id && (
+                <div className="text-right text-[10px] text-gray-400 mt-1">
+                    Selezionati: {selectedAlunniIds.length}
+                </div>
             )}
           </div>
 
@@ -631,7 +848,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
           
           <div className="flex justify-end pt-4">
             <button type="submit" className="bg-accademia-red hover:bg-red-700 text-white px-6 py-2 rounded-lg font-bold transition-colors shadow-lg">
-              Salva Lezione
+              {isCollettiva && selectedAlunniIds.length > 1 && !formData.id ? `Registra ${selectedAlunniIds.length} Lezioni` : 'Salva Lezione'}
             </button>
           </div>
         </form>

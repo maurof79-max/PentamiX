@@ -50,11 +50,12 @@ export default function RiepilogoFinanziario() {
       const endDate = `${endYear}-08-31`;
 
       // 1. Fetch Docenti (Attivi)
+      // MODIFICA: Aggiunto 'cognome' alla select e cambiato order in 'cognome'
       const { data: docenti } = await supabase
         .from('docenti')
-        .select('id, nome, strumento')
+        .select('id, nome, cognome, strumento')
         .eq('stato', 'Attivo')
-        .order('nome');
+        .order('cognome');
 
       // 2. Fetch Pagamenti (Filtrati per Anno Accademico)
       const { data: pagamenti } = await supabase
@@ -83,6 +84,7 @@ export default function RiepilogoFinanziario() {
         const row = {
           id: doc.id,
           nome: doc.nome,
+          cognome: doc.cognome, // MODIFICA: Salviamo anche il cognome
           strumento: doc.strumento,
           mesi: {},
           totale: { dovuto: 0, pagato: 0, diff: 0 }
@@ -273,7 +275,8 @@ export default function RiepilogoFinanziario() {
             {reportData.map(doc => (
               <tr key={doc.id} className="hover:bg-gray-800/30 transition-colors group border-b border-gray-700">
                 <td className="p-4 text-left border-r border-gray-700 sticky left-0 bg-accademia-card group-hover:bg-gray-800 transition-colors z-10 shadow-r-lg border-b border-gray-700">
-                  <div className="font-bold text-white text-base">{doc.nome}</div>
+                  {/* MODIFICA: Visualizza Cognome Nome */}
+                  <div className="font-bold text-white text-base">{doc.cognome} {doc.nome}</div>
                   <div className="text-sm text-gray-400 font-normal mt-0.5">({doc.strumento || '-'})</div>
                 </td>
                 

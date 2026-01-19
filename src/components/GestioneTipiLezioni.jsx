@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { supabase } from '../supabaseClient';
 import { 
-  Plus, Edit2, Trash2, X, Save, CheckCircle2, XCircle, Building, BookOpen 
+  Plus, Edit2, Trash2, X, Save, CheckCircle2, XCircle, Building, BookOpen, Users, User, AlertTriangle 
 } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
+import { getCurrentAcademicYear } from '../utils/constants';
 
 export default function GestioneTipiLezioni({ userRole }) {
   const [scuole, setScuole] = useState([]);
@@ -12,6 +13,10 @@ export default function GestioneTipiLezioni({ userRole }) {
   const [lezioni, setLezioni] = useState([]);
   const [loading, setLoading] = useState(false);
   
+  // STATO PER CHECK TARIFFE MANCANTI
+  const [tariffeMancanti, setTariffeMancanti] = useState(new Set()); 
+  const currentAnno = getCurrentAcademicYear();
+
   // Modale
   const [showModal, setShowModal] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
@@ -40,20 +45,41 @@ export default function GestioneTipiLezioni({ userRole }) {
     init();
   }, []);
 
+  // Al cambio scuola, ricarica lezioni e controlla le tariffe
   useEffect(() => {
-    if (selectedSchool) fetchLezioni();
-    else setLezioni([]);
+    if (selectedSchool) {
+        fetchLezioni();
+        checkTariffeMissing();
+    } else {
+        setLezioni([]);
+    }
   }, [selectedSchool]);
 
   const fetchLezioni = async () => {
     setLoading(true);
     const { data } = await supabase
       .from('tipi_lezioni')
-      .select('*')
+      .select('id, tipo, durata_minuti, attivo, modalita')
       .eq('school_id', selectedSchool)
       .order('tipo');
     setLezioni(data || []);
     setLoading(false);
+  };
+
+  // NUOVA FUNZIONE: CONTROLLO TARIFFE
+  const checkTariffeMissing = async () => {
+      // Scarica tutte le tariffe per l'anno corrente (indipendentemente dalla scuola, o filtrando se necessario)
+      // Qui assumiamo che la tabella 'tariffe' abbia un campo 'tipo_lezione' che corrisponde al nome della lezione
+      const { data: tariffe } = await supabase
+        .from('tariffe')
+        .select('tipo_lezione')
+        .eq('anno_accademico', currentAnno);
+      
+      // Creiamo un Set con i tipi di lezione che HANNO una tariffa
+      const tipiCoperti = new Set(tariffe?.map(t => t.tipo_lezione));
+      
+      // Salviamo questo Set per usarlo nel render
+      setTariffeMancanti(tipiCoperti);
   };
 
   const handleToggleActive = async (lez) => {
@@ -68,8 +94,6 @@ export default function GestioneTipiLezioni({ userRole }) {
   };
 
   const handleDelete = async (id) => {
-      // Nota: La cancellazione fisica potrebbe fallire se ci sono FK. 
-      // Meglio suggerire di disattivare, ma implementiamo delete con catch errore.
       setDialogConfig({
         isOpen: true,
         type: 'danger',
@@ -126,15 +150,51 @@ export default function GestioneTipiLezioni({ userRole }) {
             <thead className="bg-gray-900 text-gray-400 uppercase text-xs sticky top-0">
                 <tr>
                     <th className="px-6 py-4">Nome Lezione</th>
+                    <th className="px-6 py-4">Modalità</th>
                     <th className="px-6 py-4">Durata Standard</th>
                     <th className="px-6 py-4 text-center">Stato</th>
                     <th className="px-6 py-4 text-right">Azioni</th>
                 </tr>
             </thead>
             <tbody className="divide-y divide-gray-800">
-                {lezioni.map(l => (
+                {lezioni.map(l => {
+                    // Verifica se esiste tariffa: se il tipo è nel set 'tariffeMancanti' (che in realtà contiene i presenti), allora è coperto.
+                    // Nota: ho rinominato lo stato sopra per chiarezza logica, ma manteniamo la coerenza:
+                    // tariffeMancanti = Set dei PREZZI PRESENTI (tipiCoperti)
+                    const hasTariffa = tariffeMancanti.has(l.tipo);
+
+                    return (
                     <tr key={l.id} className="hover:bg-gray-800/30 transition-colors">
-                        <td className="px-6 py-4 font-bold text-white">{l.tipo}</td>
+                        <td className="px-6 py-4 font-bold text-white relative">
+                            <div className="flex items-center gap-2">
+                                {l.tipo}
+                                
+                                {/* ALERT VISIVO SE MANCA TARIFFA */}
+                                {l.attivo && !hasTariffa && (
+                                    <div className="group relative">
+                                        <AlertTriangle size={16} className="text-orange-500 animate-pulse cursor-help"/>
+                                        <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 w-64 bg-black text-orange-500 text-xs p-2 rounded border border-orange-500/50 shadow-xl z-50 hidden group-hover:block leading-tight">
+                                            <strong>Attenzione:</strong> Nessuna tariffa trovata per l'a.a. {currentAnno}.<br/>
+                                            Questa lezione non apparirà nel registro docenti finché non imposti un prezzo in "Gestione Tariffe".
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </td>
+                        
+                        {/* COLONNA MODALITA' */}
+                        <td className="px-6 py-4 text-gray-300">
+                            {l.modalita === 'Collettiva' ? (
+                                <span className="flex items-center gap-2 text-yellow-400 text-xs bg-yellow-400/10 px-2 py-1 rounded border border-yellow-400/20 w-fit">
+                                    <Users size={12}/> Gruppo
+                                </span>
+                            ) : (
+                                <span className="flex items-center gap-2 text-gray-400 text-xs">
+                                    <User size={12}/> Singolo
+                                </span>
+                            )}
+                        </td>
+
                         <td className="px-6 py-4 text-gray-300">{l.durata_minuti} min</td>
                         <td className="px-6 py-4 text-center">
                             <button 
@@ -153,9 +213,9 @@ export default function GestioneTipiLezioni({ userRole }) {
                             <button onClick={() => handleDelete(l.id)} className="p-2 hover:bg-gray-700 rounded text-red-400"><Trash2 size={16}/></button>
                         </td>
                     </tr>
-                ))}
+                )})}
                 {lezioni.length === 0 && (
-                    <tr><td colSpan="4" className="p-8 text-center text-gray-500">Nessuna tipologia trovata.</td></tr>
+                    <tr><td colSpan="5" className="p-8 text-center text-gray-500">Nessuna tipologia trovata.</td></tr>
                 )}
             </tbody>
         </table>
@@ -167,7 +227,8 @@ export default function GestioneTipiLezioni({ userRole }) {
             item={editingItem} 
             schoolId={selectedSchool}
             onClose={() => setShowModal(false)}
-            onSave={() => { setShowModal(false); fetchLezioni(); }}
+            // Aggiorniamo anche il controllo tariffe al salvataggio (es. se cambio nome lezione)
+            onSave={() => { setShowModal(false); fetchLezioni(); checkTariffeMissing(); }}
           />
       )}
       
@@ -181,7 +242,7 @@ function ModalTipoLezione({ item, schoolId, onClose, onSave }) {
     const [form, setForm] = useState({ 
         tipo: item?.tipo || '', 
         durata_minuti: item?.durata_minuti || 60,
-        // Se è modifica usa il valore esistente, se è nuovo default true
+        modalita: item?.modalita || 'Individuale', 
         attivo: item ? item.attivo : true 
     });
 
@@ -192,7 +253,8 @@ function ModalTipoLezione({ item, schoolId, onClose, onSave }) {
             school_id: schoolId,
             tipo: form.tipo,
             durata_minuti: parseInt(form.durata_minuti),
-            attivo: form.attivo // Passiamo il valore selezionato
+            modalita: form.modalita,
+            attivo: form.attivo 
         };
 
         let error;
@@ -200,7 +262,6 @@ function ModalTipoLezione({ item, schoolId, onClose, onSave }) {
             const { error: err } = await supabase.from('tipi_lezioni').update(payload).eq('id', item.id);
             error = err;
         } else {
-            // L'ID ora è generato dal DB grazie alla tua modifica SQL
             const { error: err } = await supabase.from('tipi_lezioni').insert([payload]);
             error = err;
         }
@@ -246,12 +307,52 @@ function ModalTipoLezione({ item, schoolId, onClose, onSave }) {
                         />
                     </div>
 
-                    {/* NUOVO CAMPO STATO */}
+                    {/* SELETTORE MODALITÀ (RADIO BUTTONS) */}
+                    <div>
+                        <label className="block text-xs font-bold text-gray-400 mb-2 uppercase">Modalità Lezione</label>
+                        <div className="flex gap-4 p-2 bg-gray-800/50 border border-gray-700 rounded-lg">
+                            <label className="flex items-center gap-2 cursor-pointer group">
+                                <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${form.modalita === 'Individuale' ? 'border-accademia-red' : 'border-gray-500'}`}>
+                                    {form.modalita === 'Individuale' && <div className="w-2 h-2 rounded-full bg-accademia-red"/>}
+                                </div>
+                                <input 
+                                    type="radio" 
+                                    name="modalita"
+                                    value="Individuale"
+                                    checked={form.modalita === 'Individuale'}
+                                    onChange={(e) => setForm({...form, modalita: e.target.value})}
+                                    className="hidden"
+                                />
+                                <span className={`text-sm ${form.modalita === 'Individuale' ? 'text-white' : 'text-gray-400 group-hover:text-gray-200'}`}>
+                                    Individuale (1 Alunno)
+                                </span>
+                            </label>
+
+                            <label className="flex items-center gap-2 cursor-pointer group">
+                                <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${form.modalita === 'Collettiva' ? 'border-accademia-red' : 'border-gray-500'}`}>
+                                    {form.modalita === 'Collettiva' && <div className="w-2 h-2 rounded-full bg-accademia-red"/>}
+                                </div>
+                                <input 
+                                    type="radio" 
+                                    name="modalita"
+                                    value="Collettiva"
+                                    checked={form.modalita === 'Collettiva'}
+                                    onChange={(e) => setForm({...form, modalita: e.target.value})}
+                                    className="hidden"
+                                />
+                                <span className={`text-sm ${form.modalita === 'Collettiva' ? 'text-white' : 'text-gray-400 group-hover:text-gray-200'}`}>
+                                    Collettiva (Gruppo)
+                                </span>
+                            </label>
+                        </div>
+                    </div>
+
+                    {/* CAMPO STATO */}
                     <div>
                         <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Stato</label>
                         <select 
-                            value={form.attivo.toString()} // Convertiamo booleano a stringa per la select HTML
-                            onChange={e => setForm({...form, attivo: e.target.value === 'true'})} // Riconvertiamo a booleano
+                            value={form.attivo.toString()} 
+                            onChange={e => setForm({...form, attivo: e.target.value === 'true'})} 
                             className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none"
                         >
                             <option value="true">Attivo (Visibile nei listini)</option>

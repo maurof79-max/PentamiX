@@ -44,7 +44,11 @@ const CompensiDocenti = ({ user }) => {
                 .from('view_calcolo_compensi')
                 .select('*')
                 .gte('data_lezione', startDate)
-                .lte('data_lezione', endDate);
+                .lte('data_lezione', endDate)
+                // MODIFICA FONDAMENTALE PER LEZIONI COLLETTIVE:
+                // Filtra solo la riga "principale" che matura il compenso per il docente.
+                // Ignora le righe duplicate create solo per tracciare gli alunni del gruppo.
+                .eq('contabilizza_docente', true); 
 
             // FILTRO PER SCUOLA (Se non è Admin)
             if (user.ruolo !== 'Admin' && user.school_id) {
@@ -324,7 +328,6 @@ const CompensiDocenti = ({ user }) => {
                                 </tr>
                             ))}
                         </tbody>
-                        {/* RIMOSSO FOOTER IN BASSO PERCHÈ SPOSTATO IN ALTO */}
                     </table>
                 )}
             </div>

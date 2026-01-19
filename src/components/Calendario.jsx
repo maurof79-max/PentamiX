@@ -25,9 +25,10 @@ export default function Calendario({ user }) {
     if (user.ruolo !== 'Docente') {
       const fetchDocenti = async () => {
         // NOTA: Recuperiamo anche school_id per passarlo al modale
+        // MODIFICA: Aggiunto 'strumento' alla select
         const { data } = await supabase
             .from('docenti')
-            .select('id, nome, cognome, school_id') 
+            .select('id, nome, cognome, school_id, strumento') 
             .eq('stato', 'Attivo')
             .order('cognome');
         if (data) setDocenti(data);
@@ -167,7 +168,12 @@ export default function Calendario({ user }) {
                 onChange={(e) => setSelectedDocenteId(e.target.value)}
               >
                 <option value="">-- Seleziona Docente --</option>
-                {docenti.map(d => <option key={d.id} value={d.id}>{d.cognome} {d.nome}</option>)}
+                {/* MODIFICA: Visualizzazione 'Cognome Nome (strumento)' */}
+                {docenti.map(d => (
+                  <option key={d.id} value={d.id}>
+                    {d.cognome} {d.nome} {d.strumento ? `(${d.strumento})` : ''}
+                  </option>
+                ))}
               </select>
               <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-500">
                 <Users size={16} />

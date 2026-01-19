@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { supabase } from '../supabaseClient';
 import { 
-  Plus, Edit2, Trash2, X, Save, CheckCircle2, XCircle, Building, BookOpen, Users, User, AlertTriangle 
+  Plus, Edit2, Trash2, X, CheckCircle2, XCircle, Building, BookOpen, Users, User, AlertTriangle 
 } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
 import { getCurrentAcademicYear } from '../utils/constants';
@@ -13,8 +13,9 @@ export default function GestioneTipiLezioni({ userRole }) {
   const [lezioni, setLezioni] = useState([]);
   const [loading, setLoading] = useState(false);
   
-  // STATO PER CHECK TARIFFE MANCANTI
-  const [tariffeMancanti, setTariffeMancanti] = useState(new Set()); 
+  // STATO PER CHECK TARIFFE
+  // Contiene un Set di stringhe con i nomi delle lezioni che HANNO una tariffa
+  const [tariffePresenti, setTariffePresenti] = useState(new Set()); 
   const currentAnno = getCurrentAcademicYear();
 
   // Modale
@@ -49,9 +50,10 @@ export default function GestioneTipiLezioni({ userRole }) {
   useEffect(() => {
     if (selectedSchool) {
         fetchLezioni();
-        checkTariffeMissing();
+        checkTariffe();
     } else {
         setLezioni([]);
+        setTariffePresenti(new Set());
     }
   }, [selectedSchool]);
 
@@ -66,20 +68,21 @@ export default function GestioneTipiLezioni({ userRole }) {
     setLoading(false);
   };
 
-  // NUOVA FUNZIONE: CONTROLLO TARIFFE
-  const checkTariffeMissing = async () => {
-      // Scarica tutte le tariffe per l'anno corrente (indipendentemente dalla scuola, o filtrando se necessario)
-      // Qui assumiamo che la tabella 'tariffe' abbia un campo 'tipo_lezione' che corrisponde al nome della lezione
+  // FUNZIONE CONTROLLO TARIFFE
+  const checkTariffe = async () => {
+      if (!selectedSchool) return;
+
+      // Scarica le tariffe per l'anno corrente e per la SCUOLA SELEZIONATA
       const { data: tariffe } = await supabase
         .from('tariffe')
         .select('tipo_lezione')
+        .eq('school_id', selectedSchool) // IMPORTANTE: Filtra per scuola
         .eq('anno_accademico', currentAnno);
       
       // Creiamo un Set con i tipi di lezione che HANNO una tariffa
       const tipiCoperti = new Set(tariffe?.map(t => t.tipo_lezione));
       
-      // Salviamo questo Set per usarlo nel render
-      setTariffeMancanti(tipiCoperti);
+      setTariffePresenti(tipiCoperti);
   };
 
   const handleToggleActive = async (lez) => {
@@ -104,7 +107,10 @@ export default function GestioneTipiLezioni({ userRole }) {
         onConfirm: async () => {
             const { error } = await supabase.from('tipi_lezioni').delete().eq('id', id);
             if(error) alert("Impossibile eliminare (probabilmente è usata in calendario/tariffe): " + error.message);
-            else fetchLezioni();
+            else {
+                fetchLezioni();
+                checkTariffe(); // Aggiorniamo anche il check tariffe
+            }
             setDialogConfig({ ...dialogConfig, isOpen: false });
         },
         onCancel: () => setDialogConfig({ ...dialogConfig, isOpen: false })
@@ -147,7 +153,7 @@ export default function GestioneTipiLezioni({ userRole }) {
       {/* TABELLA */}
       <div className="flex-1 overflow-auto border border-gray-800 rounded-xl bg-gray-900/20 custom-scrollbar">
         <table className="w-full text-left text-sm">
-            <thead className="bg-gray-900 text-gray-400 uppercase text-xs sticky top-0">
+            <thead className="bg-gray-900 text-gray-400 uppercase text-xs sticky top-0 z-10">
                 <tr>
                     <th className="px-6 py-4">Nome Lezione</th>
                     <th className="px-6 py-4">Modalità</th>
@@ -158,10 +164,8 @@ export default function GestioneTipiLezioni({ userRole }) {
             </thead>
             <tbody className="divide-y divide-gray-800">
                 {lezioni.map(l => {
-                    // Verifica se esiste tariffa: se il tipo è nel set 'tariffeMancanti' (che in realtà contiene i presenti), allora è coperto.
-                    // Nota: ho rinominato lo stato sopra per chiarezza logica, ma manteniamo la coerenza:
-                    // tariffeMancanti = Set dei PREZZI PRESENTI (tipiCoperti)
-                    const hasTariffa = tariffeMancanti.has(l.tipo);
+                    // Verifica se esiste tariffa per questo tipo di lezione
+                    const hasTariffa = tariffePresenti.has(l.tipo);
 
                     return (
                     <tr key={l.id} className="hover:bg-gray-800/30 transition-colors">
@@ -169,13 +173,13 @@ export default function GestioneTipiLezioni({ userRole }) {
                             <div className="flex items-center gap-2">
                                 {l.tipo}
                                 
-                                {/* ALERT VISIVO SE MANCA TARIFFA */}
+                                {/* ALERT VISIVO SE MANCA TARIFFA (Solo se attivo) */}
                                 {l.attivo && !hasTariffa && (
                                     <div className="group relative">
                                         <AlertTriangle size={16} className="text-orange-500 animate-pulse cursor-help"/>
-                                        <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 w-64 bg-black text-orange-500 text-xs p-2 rounded border border-orange-500/50 shadow-xl z-50 hidden group-hover:block leading-tight">
+                                        <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 w-64 bg-black text-orange-500 text-xs p-2 rounded border border-orange-500/50 shadow-xl z-50 hidden group-hover:block leading-tight pointer-events-none">
                                             <strong>Attenzione:</strong> Nessuna tariffa trovata per l'a.a. {currentAnno}.<br/>
-                                            Questa lezione non apparirà nel registro docenti finché non imposti un prezzo in "Gestione Tariffe".
+                                            Questa lezione non apparirà correttamente nel registro docenti finché non imposti un prezzo in "Gestione Tariffe".
                                         </div>
                                     </div>
                                 )}
@@ -227,8 +231,8 @@ export default function GestioneTipiLezioni({ userRole }) {
             item={editingItem} 
             schoolId={selectedSchool}
             onClose={() => setShowModal(false)}
-            // Aggiorniamo anche il controllo tariffe al salvataggio (es. se cambio nome lezione)
-            onSave={() => { setShowModal(false); fetchLezioni(); checkTariffeMissing(); }}
+            // Al salvataggio aggiorniamo sia la lista lezioni che il controllo tariffe
+            onSave={() => { setShowModal(false); fetchLezioni(); checkTariffe(); }}
           />
       )}
       
@@ -324,7 +328,7 @@ function ModalTipoLezione({ item, schoolId, onClose, onSave }) {
                                     className="hidden"
                                 />
                                 <span className={`text-sm ${form.modalita === 'Individuale' ? 'text-white' : 'text-gray-400 group-hover:text-gray-200'}`}>
-                                    Individuale (1 Alunno)
+                                    Individuale
                                 </span>
                             </label>
 
@@ -341,7 +345,7 @@ function ModalTipoLezione({ item, schoolId, onClose, onSave }) {
                                     className="hidden"
                                 />
                                 <span className={`text-sm ${form.modalita === 'Collettiva' ? 'text-white' : 'text-gray-400 group-hover:text-gray-200'}`}>
-                                    Collettiva (Gruppo)
+                                    Collettiva
                                 </span>
                             </label>
                         </div>
@@ -355,7 +359,7 @@ function ModalTipoLezione({ item, schoolId, onClose, onSave }) {
                             onChange={e => setForm({...form, attivo: e.target.value === 'true'})} 
                             className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none"
                         >
-                            <option value="true">Attivo (Visibile nei listini)</option>
+                            <option value="true">Attivo (Visibile)</option>
                             <option value="false">Non Attivo (Archiviato)</option>
                         </select>
                     </div>

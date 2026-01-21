@@ -180,10 +180,26 @@ export default function Dashboard() {
 
   const handleLogoutClick = () => setShowLogoutConfirm(true);
 
+  // Sostituisci la vecchia handleLogoutConfirm con questa:
   const handleLogoutConfirm = async () => {
+    // 1. Logout da Supabase
     await supabase.auth.signOut();
+
+    // 2. Pulizia dati utente (ma non dello slug scuola!)
     localStorage.removeItem('accademia_user');
-    navigate('/');
+    // NOTA: Non rimuoviamo 'preferred_school_slug' per ricordare la scelta
+
+    // 3. Recuperiamo lo slug salvato
+    const savedSlug = localStorage.getItem('preferred_school_slug');
+
+    // 4. Redirect intelligente
+    if (savedSlug) {
+        // Se c'è uno slug, torna alla pagina di login personalizzata
+        navigate(`/login/${savedSlug}`);
+    } else {
+        // Altrimenti vai alla home generica
+        navigate('/');
+    }
   };
 
   const handleMenuClick = (viewId) => {

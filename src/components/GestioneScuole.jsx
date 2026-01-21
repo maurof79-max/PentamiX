@@ -165,6 +165,7 @@ function ModalScuola({ scuola, moduliDisponibili, onClose, onSave }) {
     // Stati Form
     const [formData, setFormData] = useState({
         nome: scuola?.nome || '',
+        slug: scuola?.slug || '',
         logo_url: scuola?.logo_url || '',
         partita_iva: scuola?.partita_iva || '',
         codice_fiscale: scuola?.codice_fiscale || '',
@@ -276,6 +277,23 @@ function ModalScuola({ scuola, moduliDisponibili, onClose, onSave }) {
                             <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Nome Scuola / Ragione Sociale *</label>
                             <input type="text" value={formData.nome} onChange={e => setFormData({...formData, nome: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none" required />
                         </div>
+                        <div className="mt-4">
+    <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">
+        Link Personalizzato (Slug) *
+    </label>
+    <div className="flex items-center gap-2">
+        <span className="text-xs text-gray-600 font-mono">.../login/</span>
+        <input 
+            type="text" 
+            value={formData.slug} 
+            onChange={e => setFormData({...formData, slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-')})} 
+            className="flex-1 bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none font-mono text-sm" 
+            placeholder="es. nome-scuola"
+            required
+        />
+    </div>
+    <p className="text-[10px] text-gray-500 mt-1">Identificativo univoco per l'URL di accesso.</p>
+</div>
                         
                         {/* LOGO PICKER UI */}
                         <div>

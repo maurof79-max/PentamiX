@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { supabase } from '../supabaseClient';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -8,10 +8,41 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
-  const [view, setView] = useState('login'); // 'login' | 'forgot'
+  const [view, setView] = useState('login'); 
   const navigate = useNavigate();
 
-  const LOGO_URL = "https://mqdpojtisighqjmyzdwz.supabase.co/storage/v1/object/public/images/logo-glow.png";
+  // 1. Recuperiamo lo slug dall'URL (es. 'accademia-piacenza')
+  const { schoolSlug } = useParams();
+  
+  // Stati per la personalizzazione grafica
+  const [schoolInfo, setSchoolInfo] = useState(null);
+  const DEFAULT_LOGO = "https://mqdpojtisighqjmyzdwz.supabase.co/storage/v1/object/public/images/logo-glow.png";
+  const [currentLogo, setCurrentLogo] = useState(DEFAULT_LOGO);
+
+  // 2. Appena carica la pagina, se c'è uno slug, cerchiamo la scuola
+  useEffect(() => {
+    if (schoolSlug) {
+      fetchSchoolData();
+    }
+  }, [schoolSlug]);
+
+  const fetchSchoolData = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('scuole')
+        .select('nome, logo_url')
+        .eq('slug', schoolSlug)
+        .single();
+
+      if (data) {
+        setSchoolInfo(data);
+        if (data.logo_url) setCurrentLogo(data.logo_url);
+      }
+    } catch (err) {
+      console.log("Nessuna scuola trovata con questo link.", err);
+      // In caso di errore restiamo col logo di default
+    }
+  };
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -19,15 +50,15 @@ export default function Login() {
     setError(null);
 
     try {
-      // 1. Autenticazione Nativa Supabase
+      // Login standard
       const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-        email: email,
-        password: password,
+        email,
+        password,
       });
 
       if (authError) throw new Error("Credenziali non valide");
 
-      // 2. Recuperiamo i dettagli del profilo
+      // Verifica profilo utente
       const { data: userProfile, error: profileError } = await supabase
         .from('utenti')
         .select('*')
@@ -40,20 +71,18 @@ export default function Login() {
           throw new Error("Account non attivo o sospeso");
       }
 
-      // 3. REGISTRAZIONE LOG ACCESSO (Nuova Logica)
-      // Nota: Assicurati che la tabella access_logs abbia le policy RLS aperte in scrittura per utenti autenticati
-      // o usa una funzione backend se necessario. Qui assumiamo inserimento diretto.
-      await supabase.from('access_logs').insert([
-        {
+      // Log Accesso
+      await supabase.from('access_logs').insert([{
           user_id: userProfile.id,
           email: userProfile.email,
           action: 'LOGIN',
           timestamp: new Date().toISOString()
-        }
-      ]);
+      }]);
 
-      // 4. Salvataggio sessione locale e redirect
       localStorage.setItem('accademia_user', JSON.stringify(userProfile));
+      if (schoolSlug) {
+    localStorage.setItem('preferred_school_slug', schoolSlug);
+}
       navigate('/dashboard');
 
     } catch (err) {
@@ -85,9 +114,7 @@ export default function Login() {
       if (updateError) throw updateError;
 
       const resetLink = `${window.location.origin}/reset-password?token=${token}`;
-      console.log("--- LINK DI RECUPERO (SIMULAZIONE MAIL) ---");
-      console.log(resetLink);
-      
+      console.log("LINK RECUPERO:", resetLink);
       setSuccessMsg("Istruzioni inviate! (Controlla la Console per il link di test)");
       
     } catch (err) {
@@ -107,16 +134,20 @@ export default function Login() {
         <div className="text-center mb-8 flex flex-col items-center">
           <div className="w-48 h-48 mb-2 relative flex items-center justify-center">
             <div className="absolute inset-0 bg-accademia-red/20 blur-3xl rounded-full"></div>
+            {/* LOGO DINAMICO */}
             <img 
-              src={LOGO_URL} 
-              alt="Accademia Logo" 
+              src={currentLogo} 
+              alt="Logo" 
               className="w-full h-full object-contain relative z-10 drop-shadow-lg" 
             />
           </div>
+          {/* NOME SCUOLA O TITOLO STANDARD */}
           <h1 className="text-2xl font-light text-white tracking-wide uppercase">
-            {view === 'login' ? 'Area Riservata' : 'Recupero Password'}
+            {schoolInfo ? schoolInfo.nome : (view === 'login' ? 'Area Riservata' : 'Recupero Password')}
           </h1>
-          <p className="text-xs text-accademia-muted mt-2 uppercase tracking-widest">Accademia della Musica</p>
+          <p className="text-xs text-accademia-muted mt-2 uppercase tracking-widest">
+            {schoolInfo ? 'Portale Accesso' : 'Accademia della Musica'}
+          </p>
         </div>
 
         {error && (
@@ -137,9 +168,7 @@ export default function Login() {
               <input
                 type="email"
                 required
-                tabIndex={1}
                 className="w-full px-4 py-3 bg-accademia-input border border-gray-700 rounded-lg text-white placeholder-gray-600 focus:outline-none focus:border-accademia-red focus:ring-1 focus:ring-accademia-red transition-all"
-                placeholder="nome@esempio.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
               />
@@ -149,7 +178,6 @@ export default function Login() {
                 <label className="block text-xs font-bold text-gray-500 uppercase">Password</label>
                 <button 
                     type="button"
-                    tabIndex={-1}
                     onClick={() => { setError(null); setView('forgot'); }}
                     className="text-xs text-accademia-red hover:text-red-400 transition-colors"
                 >
@@ -159,9 +187,7 @@ export default function Login() {
               <input
                 type="password"
                 required
-                tabIndex={2}
                 className="w-full px-4 py-3 bg-accademia-input border border-gray-700 rounded-lg text-white placeholder-gray-600 focus:outline-none focus:border-accademia-red focus:ring-1 focus:ring-accademia-red transition-all"
-                placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
               />
@@ -169,16 +195,10 @@ export default function Login() {
             
             <button
               type="submit"
-              tabIndex={3}
               disabled={loading}
-              className="w-full py-3 px-4 bg-accademia-red hover:bg-red-700 text-white font-bold rounded-lg transition-all duration-300 shadow-lg shadow-red-900/30 hover:shadow-red-900/50 disabled:opacity-50 disabled:cursor-not-allowed mt-2"
+              className="w-full py-3 px-4 bg-accademia-red hover:bg-red-700 text-white font-bold rounded-lg transition-all duration-300 shadow-lg shadow-red-900/30 hover:shadow-red-900/50 disabled:opacity-50"
             >
-              {loading ? (
-                  <span className="flex items-center justify-center gap-2">
-                      <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
-                      Accesso...
-                  </span>
-              ) : 'ACCEDI'}
+              {loading ? 'Accesso...' : 'ACCEDI'}
             </button>
           </form>
         )}
@@ -188,27 +208,23 @@ export default function Login() {
             <div className="text-center text-sm text-gray-400 mb-4 px-4">
                 Inserisci la tua email. Ti invieremo le istruzioni per reimpostare la password.
             </div>
-
             <div>
-              <label className="block text-xs font-bold text-gray-500 uppercase mb-1 ml-1">Email di registrazione</label>
+              <label className="block text-xs font-bold text-gray-500 uppercase mb-1 ml-1">Email</label>
               <input
                 type="email"
                 required
                 className="w-full px-4 py-3 bg-accademia-input border border-gray-700 rounded-lg text-white placeholder-gray-600 focus:outline-none focus:border-accademia-red focus:ring-1 focus:ring-accademia-red transition-all"
-                placeholder="nome@esempio.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
               />
             </div>
-            
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-3 px-4 bg-accademia-red hover:bg-red-700 text-white font-bold rounded-lg transition-all duration-300 shadow-lg shadow-red-900/30 hover:shadow-red-900/50 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full py-3 px-4 bg-accademia-red hover:bg-red-700 text-white font-bold rounded-lg transition-all"
             >
-               {loading ? 'Invio in corso...' : 'INVIA ISTRUZIONI'}
+               {loading ? 'Invio...' : 'INVIA ISTRUZIONI'}
             </button>
-
             <button
                 type="button"
                 onClick={() => { setError(null); setView('login'); }}
@@ -218,11 +234,10 @@ export default function Login() {
             </button>
           </form>
         )}
-
       </div>
       
       <div className="absolute bottom-4 text-center w-full text-[10px] text-gray-600 uppercase tracking-widest z-10">
-          © {new Date().getFullYear()} Accademia della Musica • Gestionale v2.0
+          © {new Date().getFullYear()} {schoolInfo ? schoolInfo.nome : 'Accademia della Musica'} • Gestionale v2.0
       </div>
     </div>
   );

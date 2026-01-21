@@ -1,10 +1,15 @@
 import { useEffect, useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { supabase } from '../supabaseClient';
-import { Plus, X, Edit2, Trash2, Search, ArrowUpDown, AlertTriangle, Users, User, Loader2 } from 'lucide-react';
+import { 
+    Plus, X, Edit2, Trash2, Search, ArrowUpDown, AlertTriangle, 
+    Users, User, Loader2, Printer, CheckSquare, Square 
+} from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
 
-// --- IMPORT CENTRALIZZATO ---
+// --- IMPORT PDF GENERATOR ---
+import { generateRegistroPDF } from '../utils/pdfGenerator';
+
 import { 
   MESI_STANDARD as MESI, 
   getCurrentAcademicYear 
@@ -16,13 +21,13 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
   const [activeYears, setActiveYears] = useState([]); 
   
   const [docenti, setDocenti] = useState([]);
-  const [alunni, setAlunni] = useState([]); // Alunni globali per i filtri
+  const [alunni, setAlunni] = useState([]); 
   
   const [tariffeAnno, setTariffeAnno] = useState([]); 
 
   // Inizializza filtri
   const [filters, setFilters] = useState({
-    docente_id: user.ruolo === 'Docente' ? user.id_collegato : '',
+    docente_id: user.ruolo === 'Docente' ? (user.id_collegato || '') : '',
     alunno_id: '',
     tipo_lezione_id: '', 
     mese: new Date().getMonth() + 1,
@@ -31,25 +36,25 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
   
   const [sortConfig, setSortConfig] = useState({ key: 'data_lezione', direction: 'desc' });
   const [showModal, setShowModal] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false); 
   const [editingLezione, setEditingLezione] = useState(null);
   
   const [confirmDialog, setConfirmDialog] = useState({ 
-    isOpen: false, 
-    type: 'danger',
-    title: '',
-    message: '',
-    confirmText: 'Conferma',
-    onConfirm: null,
-    showCancel: true
+    isOpen: false, type: 'danger', title: '', message: '', confirmText: 'Conferma', onConfirm: null, showCancel: true
   });
 
-  // --- 1. Carica Anni ---
+  // --- 1. Carica Anni (con Deduplicazione) ---
   useEffect(() => {
     const fetchYears = async () => {
         try {
             const { data } = await supabase.from('anni_accademici').select('anno').order('anno', {ascending:false});
-            if(data && data.length > 0) setActiveYears(data);
-            else setActiveYears([{anno: '2024/2025'}, {anno: '2025/2026'}]); 
+            if(data && data.length > 0) {
+                // FIX DUPLICATI: Usiamo un Map per rimuovere anni duplicati visivamente
+                const uniqueYears = Array.from(new Map(data.map(item => [item.anno, item])).values());
+                setActiveYears(uniqueYears);
+            } else {
+                setActiveYears([{anno: '2024/2025'}, {anno: '2025/2026'}]); 
+            }
         } catch (e) {
             console.warn("Tabella anni mancante", e);
         }
@@ -71,9 +76,8 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
     const fetchResources = async () => {
       // Docenti (Solo se non è docente)
       if (user.ruolo !== 'Docente') {
-        let queryDoc = supabase.from('docenti').select('id, nome, cognome, school_id').order('cognome');
+        let queryDoc = supabase.from('docenti').select('id, nome, cognome, strumento, school_id').order('cognome');
         
-        // FILTRO GESTORE: Carica solo i docenti della scuola assegnata
         if (user.school_id) {
             queryDoc = queryDoc.eq('school_id', user.school_id);
         }
@@ -86,21 +90,20 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
         setDocenti(docentiFormatted);
       }
 
-      // Alunni (Per i FILTRI della tabella principale, carichiamo tutti)
+      // Alunni
       let alunniList = [];
       if (user.ruolo === 'Docente') {
-          // Docente vede solo i suoi associati
-          const { data: assocData } = await supabase
-            .from('associazioni')
-            .select('alunni(id, nome, cognome)')
-            .eq('docente_id', user.id_collegato);
-          
-          alunniList = assocData?.map(a => a.alunni).filter(Boolean) || [];
+          if (user.id_collegato) {
+              const { data: assocData } = await supabase
+                .from('associazioni')
+                .select('alunni(id, nome, cognome)')
+                .eq('docente_id', user.id_collegato);
+              
+              alunniList = assocData?.map(a => a.alunni).filter(Boolean) || [];
+          }
       } else {
-          // Admin/Gestore
           let queryAlunni = supabase.from('alunni').select('id, nome, cognome').eq('stato', 'Attivo');
           
-          // FILTRO GESTORE: Carica solo alunni della scuola assegnata
           if (user.school_id) {
               queryAlunni = queryAlunni.eq('school_id', user.school_id);
           }
@@ -109,11 +112,9 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
           alunniList = a || [];
       }
 
-      // Ordinamento per Cognome
       alunniList.sort((a, b) => (a.cognome || '').localeCompare(b.cognome || ''));
       setAlunni(alunniList);
       
-      // Tariffe per il FORM
       if (filters.anno) {
           const { data: t } = await supabase
             .from('tariffe')
@@ -130,8 +131,11 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
   const fetchLezioni = async () => {
     if (!filters.anno) return; 
     setLoading(true);
+    
     try {
       const [startYear, endYear] = filters.anno.split('/').map(Number);
+      if (!startYear || !endYear) throw new Error("Formato anno non valido");
+
       const startDate = `${startYear}-09-01`;
       const endDate = `${endYear}-08-31`;
 
@@ -141,15 +145,24 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
           id, data_lezione, convalidato, anno_accademico, contabilizza_docente, tipo_lezione_id,
           docenti!inner ( id, nome, cognome, school_id ),
           alunni ( id, nome, cognome ),
-          tipi_lezioni ( id, tipo, costo, modalita )
+          tipi_lezioni ( id, tipo, modalita ) 
         `)
         .gte('data_lezione', startDate)
         .lte('data_lezione', endDate);
 
+      // --- FILTRI RUOLO E SCUOLA ---
       if (user.ruolo === 'Docente') {
+          if (!user.id_collegato) {
+              console.warn("Utente Docente senza id_collegato. Impossibile caricare lezioni.");
+              setLezioni([]);
+              setLoading(false);
+              return;
+          }
           query = query.eq('docente_id', user.id_collegato);
       } else {
-          if (filters.docente_id) query = query.eq('docente_id', filters.docente_id);
+          if (filters.docente_id) {
+              query = query.eq('docente_id', filters.docente_id);
+          }
           if (user.school_id) {
               query = query.eq('docenti.school_id', user.school_id);
           }
@@ -166,16 +179,7 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
       }
       setLezioni(filteredData);
     } catch (err) { 
-        console.error("Errore registro:", err); 
-        setConfirmDialog({
-          isOpen: true,
-          type: 'danger',
-          title: 'Errore',
-          message: 'Errore caricamento lezioni. Controlla la console per dettagli.',
-          confirmText: 'OK',
-          showCancel: false,
-          onConfirm: () => setConfirmDialog(prev => ({ ...prev, isOpen: false }))
-        });
+        console.error("Errore registro fetchLezioni:", err); 
     } finally { 
         setLoading(false); 
     }
@@ -364,20 +368,38 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
             <Search className="text-accademia-red" size={20}/> Registro Lezioni
           </h2>
           
-          {(user.ruolo !== 'Docente' || filters.anno === getCurrentAcademicYear()) && (
-              <button 
-                onClick={handleNewLezione}
-                className="flex items-center gap-2 bg-accademia-red hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm transition-colors shadow-sm"
-              >
-                <Plus size={16} /> Nuova Lezione
-              </button>
-          )}
+          <div className="flex gap-2">
+            {/* --- PULSANTE EXPORT (Solo Admin/Gestore) --- */}
+            {user.ruolo !== 'Docente' && (
+                <button 
+                  onClick={() => setShowExportModal(true)}
+                  className="flex items-center gap-2 bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-md text-sm transition-colors shadow-sm border border-gray-600"
+                  title="Esporta Registro (PDF)"
+                >
+                  <Printer size={16} /> <span className="hidden sm:inline">Esporta</span>
+                </button>
+            )}
+
+            {(user.ruolo !== 'Docente' || filters.anno === getCurrentAcademicYear()) && (
+                <button 
+                  onClick={handleNewLezione}
+                  className="flex items-center gap-2 bg-accademia-red hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm transition-colors shadow-sm"
+                >
+                  <Plus size={16} /> Nuova Lezione
+                </button>
+            )}
+          </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
-          {/* Selettore Anno */}
+          {/* Selettore Anno con key unica */}
           {user.ruolo !== 'Docente' && (
-              <select name="anno" value={filters.anno} onChange={(e) => setFilters({...filters, anno: e.target.value})} className="bg-gray-800 border border-gray-600 text-white text-sm rounded px-3 py-2 font-bold focus:border-accademia-red focus:outline-none">
+              <select 
+                name="anno" 
+                value={filters.anno} 
+                onChange={(e) => setFilters({...filters, anno: e.target.value})} 
+                className="bg-gray-800 border border-gray-600 text-white text-sm rounded px-3 py-2 font-bold focus:border-accademia-red focus:outline-none"
+              >
                   {activeYears.map(y => <option key={y.anno} value={y.anno}>{y.anno}</option>)}
                   {activeYears.length === 0 && <option value={getCurrentAcademicYear()}>{getCurrentAcademicYear()}</option>}
               </select>
@@ -458,13 +480,23 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
         <ModalRegistro 
           lezione={editingLezione} 
           docenti={docenti}
-          alunni={alunni} // Passiamo l'array globale, ma nel modale useremo quello filtrato
+          alunni={alunni} 
           tariffe={tariffeAnno}
           user={user}
           anno={filters.anno} 
           onClose={() => setShowModal(false)}
           onSave={() => { setShowModal(false); fetchLezioni(); }}
         />
+      )}
+
+      {/* --- MODALE EXPORT PDF (NUOVO) --- */}
+      {showExportModal && (
+          <ModalExportRegistro 
+            docenti={docenti} 
+            anno={filters.anno}
+            user={user}
+            onClose={() => setShowExportModal(false)}
+          />
       )}
 
       <ConfirmDialog
@@ -482,7 +514,7 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
   );
 }
 
-// --- MODALE ---
+// --- MODALE INSERIMENTO/MODIFICA (INVARIATA) ---
 function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose, onSave }) {
   const [formData, setFormData] = useState({
     id: lezione?.id || null,
@@ -498,26 +530,22 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
   const [selectedAlunniIds, setSelectedAlunniIds] = useState([]);
   const [lessonModes, setLessonModes] = useState({});
   
-  // STATI PER IL FILTRO ALUNNI DINAMICO
   const [filteredAlunni, setFilteredAlunni] = useState([]);
   const [loadingAlunni, setLoadingAlunni] = useState(false);
 
   // 1. CARICAMENTO ALUNNI FILTRATI PER DOCENTE
   useEffect(() => {
     const fetchAlunniByDocente = async () => {
-        // Se non c'è docente selezionato, lista vuota
         if (!formData.docente_id) {
             setFilteredAlunni([]);
             return;
         }
 
-        // Se sono Docente, la lista passata come prop 'alunni' è già filtrata dal parent
         if (user.ruolo === 'Docente') {
             setFilteredAlunni(alunni);
             return;
         }
 
-        // Se sono Admin/Gestore, devo fare fetch delle associazioni per questo docente
         setLoadingAlunni(true);
         const { data } = await supabase
             .from('associazioni')
@@ -553,7 +581,6 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
         .eq('docente_id', formData.docente_id);
 
       if (error) {
-        console.error("Errore recupero competenze docente:", error);
         setFilteredTariffe(tariffe); 
       } else {
         const allowedTypes = competenze?.map(c => c.tipi_lezioni?.tipo) || [];
@@ -574,13 +601,9 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
     if (!formData.id) {
         filterTariffeByDocente();
     } else {
-        // In modifica, setta isCollettiva in base al record caricato
         if (lezione?.tipi_lezioni?.modalita === 'Collettiva') {
             setIsCollettiva(true);
         }
-        // In modifica (Admin) serve comunque caricare gli alunni associati per poter cambiare studente
-        // Ma attenzione: l'alunno attuale potrebbe NON essere più associato. 
-        // Per semplicità ricarichiamo gli associati. Se l'attuale non c'è, sarà gestito dalla select value.
     }
   }, [formData.docente_id, tariffe, formData.id]);
 
@@ -614,11 +637,11 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
         const tariffaSelezionata = tariffe.find(t => String(t.id) === String(formData.tipo_lezione_id));
         if (!tariffaSelezionata) return alert("Errore: tariffa non trovata.");
 
+        // FIX: Rimosso controllo su 'costo' perché non esiste nella tabella tipi_lezioni
         const { data: existingTipo, error: searchError } = await supabase
           .from('tipi_lezioni')
           .select('id')
           .eq('tipo', tariffaSelezionata.tipo_lezione)
-          .eq('costo', tariffaSelezionata.costo)
           .maybeSingle();
 
         if (searchError && searchError.code !== 'PGRST116') throw searchError;
@@ -627,12 +650,12 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
           tipoLezioneId = existingTipo.id;
         } else {
           const newTipoId = 'TL' + Date.now();
+          // FIX: Rimosso inserimento 'costo'
           const { error: insertTipoError } = await supabase
             .from('tipi_lezioni')
             .insert([{
               id: newTipoId,
               tipo: tariffaSelezionata.tipo_lezione,
-              costo: tariffaSelezionata.costo,
               durata_minuti: 60,
               modalita: isCollettiva ? 'Collettiva' : 'Individuale', 
               school_id: user.school_id
@@ -687,7 +710,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
         // --- NUOVO ---
         if (isCollettiva) {
             const rowsToInsert = selectedAlunniIds.map((alunnoId, index) => ({
-                id: 'R' + Date.now() + index, 
+                id: crypto.randomUUID(), 
                 ...basePayload,
                 alunno_id: alunnoId,
                 contabilizza_docente: index === 0 ? true : false 
@@ -697,7 +720,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
             if (error) throw error;
 
         } else {
-            const newId = 'R' + Date.now();
+            const newId = crypto.randomUUID();
             const { error } = await supabase.from('registro').insert([{ 
                 id: newId, 
                 ...basePayload, 
@@ -855,4 +878,171 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
       </div>
     </div>, document.body
   );
+}
+
+// --- NUOVO: MODALE EXPORT REGISTRO ---
+function ModalExportRegistro({ docenti, anno, user, onClose }) {
+    const [selectedMonths, setSelectedMonths] = useState(MESI.map(m => m.val)); // Default tutti
+    const [selectedDocenti, setSelectedDocenti] = useState(docenti.map(d => d.id)); // Default tutti
+    const [loading, setLoading] = useState(false);
+
+    const toggleMonth = (val) => {
+        if (selectedMonths.includes(val)) setSelectedMonths(selectedMonths.filter(m => m !== val));
+        else setSelectedMonths([...selectedMonths, val]);
+    };
+
+    const toggleDocente = (id) => {
+        if (selectedDocenti.includes(id)) setSelectedDocenti(selectedDocenti.filter(d => d !== id));
+        else setSelectedDocenti([...selectedDocenti, id]);
+    };
+
+    const toggleAllMonths = () => {
+        if (selectedMonths.length === MESI.length) setSelectedMonths([]);
+        else setSelectedMonths(MESI.map(m => m.val));
+    };
+
+    const toggleAllDocenti = () => {
+        if (selectedDocenti.length === docenti.length) setSelectedDocenti([]);
+        else setSelectedDocenti(docenti.map(d => d.id));
+    };
+
+    const handleExport = async () => {
+        if (selectedMonths.length === 0) return alert("Seleziona almeno un mese.");
+        if (selectedDocenti.length === 0) return alert("Seleziona almeno un docente.");
+
+        setLoading(true);
+        try {
+            const [startYear, endYear] = anno.split('/').map(Number);
+            const startDate = `${startYear}-09-01`;
+            const endDate = `${endYear}-08-31`;
+
+            let query = supabase
+                .from('registro')
+                .select(`
+                    id, data_lezione, convalidato,
+                    docenti!inner ( id, nome, cognome, strumento, school_id ),
+                    alunni ( nome, cognome ),
+                    tipi_lezioni ( tipo, durata_minuti )
+                `)
+                .gte('data_lezione', startDate)
+                .lte('data_lezione', endDate)
+                .in('docente_id', selectedDocenti)
+                .eq('docenti.school_id', user.school_id);
+
+            const { data, error } = await query;
+            if (error) throw error;
+
+            // Filtro ulteriore per mesi
+            const filteredData = data.filter(r => {
+                const m = new Date(r.data_lezione).getMonth() + 1;
+                return selectedMonths.includes(m);
+            });
+
+            if (filteredData.length === 0) {
+                alert("Nessuna lezione trovata con i filtri selezionati.");
+            } else {
+                // Info Scuola per il PDF
+                const schoolInfo = {
+                    name: user.scuole?.nome || 'Accademia Musicale',
+                    logo: user.scuole?.logo_url || null
+                };
+                
+                // Creiamo l'array delle etichette dei mesi selezionati per l'intestazione
+                // Ordiniamo i mesi selezionati secondo l'ordine definito in MESI
+                const selectedLabels = MESI
+                    .filter(m => selectedMonths.includes(m.val))
+                    .map(m => m.label);
+
+                await generateRegistroPDF(schoolInfo, { anno }, filteredData, selectedLabels);
+            }
+            onClose();
+
+        } catch (err) {
+            console.error(err);
+            alert("Errore esportazione: " + err.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={onClose}></div>
+            <div className="relative bg-accademia-card border border-gray-700 w-full max-w-2xl rounded-xl shadow-2xl p-6 flex flex-col max-h-[90vh]">
+                <div className="flex justify-between mb-4 shrink-0">
+                    <h3 className="text-xl font-bold text-white flex items-center gap-2"><Printer size={20}/> Esporta Registro Lezioni</h3>
+                    <button onClick={onClose}><X className="text-gray-400 hover:text-white"/></button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto custom-scrollbar space-y-6 pr-2">
+                    
+                    {/* SELEZIONE MESI */}
+                    <div className="bg-gray-900/30 p-4 rounded-lg border border-gray-800">
+                        <div className="flex justify-between items-center mb-3">
+                            <h4 className="text-sm font-bold text-accademia-red uppercase">1. Seleziona Mesi</h4>
+                            <button onClick={toggleAllMonths} className="text-xs text-blue-400 hover:text-white flex items-center gap-1">
+                                {selectedMonths.length === MESI.length ? <CheckSquare size={14}/> : <Square size={14}/>} 
+                                {selectedMonths.length === MESI.length ? 'Deseleziona Tutti' : 'Seleziona Tutti'}
+                            </button>
+                        </div>
+                        <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                            {MESI.map(m => (
+                                <button 
+                                    key={m.val} 
+                                    onClick={() => toggleMonth(m.val)}
+                                    className={`text-xs p-2 rounded border transition-all ${
+                                        selectedMonths.includes(m.val) 
+                                        ? 'bg-accademia-red text-white border-red-600' 
+                                        : 'bg-gray-800 text-gray-400 border-gray-700 hover:border-gray-500'
+                                    }`}
+                                >
+                                    {m.label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* SELEZIONE DOCENTI */}
+                    <div className="bg-gray-900/30 p-4 rounded-lg border border-gray-800">
+                        <div className="flex justify-between items-center mb-3">
+                            <h4 className="text-sm font-bold text-accademia-red uppercase">2. Seleziona Docenti</h4>
+                            <button onClick={toggleAllDocenti} className="text-xs text-blue-400 hover:text-white flex items-center gap-1">
+                                {selectedDocenti.length === docenti.length ? <CheckSquare size={14}/> : <Square size={14}/>} 
+                                {selectedDocenti.length === docenti.length ? 'Deseleziona Tutti' : 'Seleziona Tutti'}
+                            </button>
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                            {docenti.map(d => (
+                                <button 
+                                    key={d.id} 
+                                    onClick={() => toggleDocente(d.id)}
+                                    className={`text-xs p-2 rounded border text-left truncate transition-all ${
+                                        selectedDocenti.includes(d.id) 
+                                        ? 'bg-blue-900/40 text-blue-100 border-blue-700' 
+                                        : 'bg-gray-800 text-gray-400 border-gray-700 hover:border-gray-500'
+                                    }`}
+                                >
+                                    {d.nome_completo}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                </div>
+
+                <div className="pt-4 mt-4 border-t border-gray-800 flex justify-end gap-3 shrink-0">
+                    <button onClick={onClose} className="px-4 py-2 text-gray-300 hover:text-white">Annulla</button>
+                    <button 
+                        onClick={handleExport} 
+                        disabled={loading}
+                        className="flex items-center gap-2 bg-accademia-red hover:bg-red-700 text-white px-6 py-2 rounded-lg font-bold shadow-lg disabled:opacity-50"
+                    >
+                        {loading ? <Loader2 size={18} className="animate-spin"/> : <Printer size={18}/>}
+                        {loading ? 'Generazione PDF...' : 'Scarica PDF'}
+                    </button>
+                </div>
+            </div>
+        </div>,
+        document.body
+    );
 }

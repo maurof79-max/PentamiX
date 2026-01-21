@@ -5,7 +5,7 @@ import {
   LogOut, Calendar, Users, DollarSign, BookOpen, Settings, 
   UserCog, GraduationCap, ClipboardList, TableProperties, Menu, ChevronLeft,
   Shield, LayoutDashboard, Building, Archive,
-  ReceiptText, Euro, Scale // <--- IMPORTATI NUOVI COMPONENTI
+  ReceiptText, Euro, Scale, EyeOff // <--- Aggiunto EyeOff per il banner
 } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
 
@@ -25,7 +25,6 @@ const ICON_MAP = {
     'LayoutDashboard': <LayoutDashboard size={18} />, 
     'Building': <Building size={18} />,
     'Archive': <Archive size={18} />,
-    // --- NUOVE ICONE AGGIUNTE ALLA MAPPA ---
     'ReceiptText': <ReceiptText size={18} />,
     'Euro': <Euro size={18} />,
     'Scale': <Scale size={18} />
@@ -60,44 +59,71 @@ export default function Dashboard() {
   const [showPasswordChangeModal, setShowPasswordChangeModal] = useState(false);
   const [showSuccessDialog, setShowSuccessDialog] = useState(false);
   
+  // STATO PER MODALITÀ IMPERSONIFICAZIONE
+  const [isImpersonating, setIsImpersonating] = useState(false);
+
   const navigate = useNavigate();
   const DEFAULT_LOGO = "https://mqdpojtisighqjmyzdwz.supabase.co/storage/v1/object/public/images/logo-glow.png";
 
   useEffect(() => {
     const initDashboard = async () => {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) {
-            localStorage.removeItem('accademia_user');
-            navigate('/');
-            return;
+        let currentUser = null;
+        let impersonatingMode = false;
+
+        // 1. CONTROLLO IMPERSONIFICAZIONE
+        // Se c'è il flag, carichiamo l'utente "finto" dal localStorage invece di interrogare Supabase Auth
+        if (localStorage.getItem('is_impersonating') === 'true') {
+            const storedFakeUser = localStorage.getItem('accademia_user');
+            if (storedFakeUser) {
+                currentUser = JSON.parse(storedFakeUser);
+                impersonatingMode = true;
+                setIsImpersonating(true);
+            }
         }
 
-        let currentUser = null;
-        const { data: profile } = await supabase
-            .from('utenti')
-            .select('*, scuole(nome, logo_url, moduli_attivi)') 
-            .eq('id', session.user.id)
-            .single();
+        // 2. SE NON IMPERSONO, LOGIN STANDARD
+        if (!currentUser) {
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session) {
+                localStorage.removeItem('accademia_user');
+                navigate('/');
+                return;
+            }
 
-        if (profile) {
+            // Fetch del profilo reale
+            const { data: profile } = await supabase
+                .from('utenti')
+                .select('*, scuole(nome, logo_url, moduli_attivi)') 
+                .eq('id', session.user.id)
+                .single();
+            
             currentUser = profile;
-            setUser(profile);
-            localStorage.setItem('accademia_user', JSON.stringify(profile));
+        }
 
-            if (profile.ruolo === 'Admin') {
+        // 3. LOGICA COMUNE (MENU E UI)
+        if (currentUser) {
+            setUser(currentUser);
+            
+            // Se sono l'utente reale, salvo i dati. Se impersono, i dati sono già lì.
+            if (!impersonatingMode) {
+                localStorage.setItem('accademia_user', JSON.stringify(currentUser));
+            }
+
+            // Setup Info Scuola
+            if (currentUser.ruolo === 'Admin') {
                 setSchoolInfo({
                     name: 'Amministrazione',
                     logo: DEFAULT_LOGO
                 });
             } else {
                 setSchoolInfo({
-                    name: profile.scuole?.nome || 'Nessuna Scuola',
-                    logo: profile.scuole?.logo_url || DEFAULT_LOGO
+                    name: currentUser.scuole?.nome || 'Nessuna Scuola',
+                    logo: currentUser.scuole?.logo_url || DEFAULT_LOGO
                 });
             }
 
-            const activeModules = profile.scuole?.moduli_attivi || [];
-
+            // Setup Menu
+            const activeModules = currentUser.scuole?.moduli_attivi || [];
             const { data: moduliData } = await supabase.from('sys_moduli').select('*').order('ordine');
             const { data: schedeData } = await supabase.from('sys_schede').select('*').order('ordine');
 
@@ -106,9 +132,17 @@ export default function Dashboard() {
                 moduliData.forEach(mod => {
                     const validItems = schedeData.filter(scheda => {
                         if (scheda.modulo_codice !== mod.codice) return false;
-                        if (profile.ruolo === 'Admin') return true;
+                        
+                        // L'Admin vede tutto, MA se sta impersonando deve vedere solo ciò che vede l'impersonato
+                        // Quindi usiamo currentUser.ruolo (che sarà quello fake in modalità impersonazione)
+                        if (currentUser.ruolo === 'Admin') return true;
+                        
+                        // Controllo attivazione modulo per la scuola
                         if (!activeModules.includes(mod.codice)) return false;
-                        if (scheda.ruoli_ammessi && !scheda.ruoli_ammessi.includes(profile.ruolo)) return false;
+                        
+                        // Controllo permessi ruolo
+                        if (scheda.ruoli_ammessi && !scheda.ruoli_ammessi.includes(currentUser.ruolo)) return false;
+                        
                         return true;
                     }).map(scheda => ({
                         id: scheda.codice_vista, 
@@ -126,23 +160,26 @@ export default function Dashboard() {
                 });
                 setMenuGroups(groups);
                 
+                // Seleziona la prima vista di default se nessuna è attiva
                 if (!activeView && groups.length > 0 && groups[0].items.length > 0) {
                     setActiveView(groups[0].items[0].id);
                 }
             }
         }
 
+        // Controllo cambio password obbligatorio
         if (currentUser && currentUser.must_change_password) setShowPasswordChangeModal(true);
         
+        // Fetch Anno Accademico
         const { data: yearData } = await supabase
             .from('anni_accademici')
             .select('anno')
             .eq('is_current', true)
             .limit(1)
             .maybeSingle();
-            
         if (yearData) setCurrentAcademicYear(yearData.anno);
 
+        // Fetch Config
         const { data: configData } = await supabase.from('config_app').select('*');
         if (configData) {
             const configMap = {};
@@ -151,7 +188,7 @@ export default function Dashboard() {
         }
     };
     initDashboard();
-  }, [navigate]); 
+  }, [navigate]); // Rimosso activeView dalle dipendenze per evitare loop
 
   useEffect(() => {
     let timeoutId;
@@ -180,31 +217,50 @@ export default function Dashboard() {
 
   const handleLogoutClick = () => setShowLogoutConfirm(true);
 
-  // Sostituisci la vecchia handleLogoutConfirm con questa:
+  // --- LOGOUT INTELLIGENTE ---
   const handleLogoutConfirm = async () => {
     // 1. Logout da Supabase
     await supabase.auth.signOut();
 
-    // 2. Pulizia dati utente (ma non dello slug scuola!)
+    // 2. Pulizia dati utente
     localStorage.removeItem('accademia_user');
-    // NOTA: Non rimuoviamo 'preferred_school_slug' per ricordare la scelta
+    
+    // Se stavo impersonando, pulisco tutto
+    localStorage.removeItem('is_impersonating');
+    localStorage.removeItem('impersonation_admin_backup');
 
-    // 3. Recuperiamo lo slug salvato
+    // 3. Recuperiamo lo slug scuola salvato (NON lo cancelliamo)
     const savedSlug = localStorage.getItem('preferred_school_slug');
 
-    // 4. Redirect intelligente
+    // 4. Redirect
     if (savedSlug) {
-        // Se c'è uno slug, torna alla pagina di login personalizzata
         navigate(`/login/${savedSlug}`);
     } else {
-        // Altrimenti vai alla home generica
         navigate('/');
     }
   };
 
+  // --- USCITA DA MODALITÀ IMPERSONIFICAZIONE ---
+  const stopImpersonation = () => {
+      // 1. Recupera backup admin
+      const adminBackup = localStorage.getItem('impersonation_admin_backup');
+      
+      if (adminBackup) {
+          // 2. Ripristina utente admin
+          localStorage.setItem('accademia_user', adminBackup);
+      }
+      
+      // 3. Pulisci flag
+      localStorage.removeItem('impersonation_admin_backup');
+      localStorage.removeItem('is_impersonating');
+      // Nota: Non tocchiamo preferred_school_slug qui
+
+      // 4. Ricarica pagina per tornare admin
+      window.location.href = '/dashboard';
+  };
+
   const handleMenuClick = (viewId) => {
     setActiveView(viewId);
-    // CHIUSURA AUTOMATICA PER VISTE FINANZIARIE
     if (window.innerWidth < 768 || ['dettaglio_pagamenti', 'finanza', 'compensi-docenti'].includes(viewId)) {
       setIsSidebarOpen(false);
     }
@@ -239,9 +295,26 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="h-screen flex bg-accademia-dark text-accademia-text font-sans overflow-hidden">
+    <div className="h-screen flex bg-accademia-dark text-accademia-text font-sans overflow-hidden relative">
       
-      <aside className={`bg-accademia-card border-r border-gray-800 flex flex-col shadow-2xl z-30 transition-all duration-300 ease-in-out absolute md:relative h-full ${isSidebarOpen ? 'w-64 translate-x-0' : 'w-0 -translate-x-full md:w-0 md:translate-x-0 overflow-hidden'}`}>
+      {/* --- BANNER DI AVVISO IMPERSONIFICAZIONE --- */}
+      {isImpersonating && (
+          <div className="absolute top-0 left-0 w-full bg-amber-500 text-black z-50 px-4 py-1.5 text-xs font-bold flex justify-between items-center shadow-lg">
+              <div className="flex items-center gap-2">
+                  <EyeOff size={16} />
+                  <span>MODALITÀ DEBUG: Stai vedendo l'app come {user?.nome_esteso} ({user?.ruolo})</span>
+              </div>
+              <button 
+                  onClick={stopImpersonation}
+                  className="bg-black/20 hover:bg-black/40 text-white px-3 py-0.5 rounded transition-colors uppercase tracking-wider"
+              >
+                  Torna Admin
+              </button>
+          </div>
+      )}
+
+      {/* SIDEBAR */}
+      <aside className={`bg-accademia-card border-r border-gray-800 flex flex-col shadow-2xl z-30 transition-all duration-300 ease-in-out absolute md:relative h-full ${isSidebarOpen ? 'w-64 translate-x-0' : 'w-0 -translate-x-full md:w-0 md:translate-x-0 overflow-hidden'} ${isImpersonating ? 'pt-8' : ''}`}>
         
         <div className="p-6 border-b border-gray-800 flex justify-between items-center min-w-[16rem] h-28 shrink-0"> 
           <div className="flex items-center justify-center w-full pr-2"> 
@@ -290,7 +363,7 @@ export default function Dashboard() {
         </div>
       </aside>
 
-      <main className="flex-1 flex flex-col h-screen overflow-hidden bg-accademia-dark relative w-full">
+      <main className={`flex-1 flex flex-col h-screen overflow-hidden bg-accademia-dark relative w-full ${isImpersonating ? 'pt-8' : ''}`}>
          <div className="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-gray-900 to-transparent pointer-events-none z-0"></div>
         
         <header className="h-16 bg-accademia-card border-b border-gray-800 flex items-center justify-between px-4 z-20 shrink-0 gap-4 relative">

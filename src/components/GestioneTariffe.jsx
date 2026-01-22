@@ -37,12 +37,13 @@ export default function GestioneTariffe({ userRole, config }) {
         const { data: profile } = await supabase.from('utenti').select('*').eq('id', session.user.id).single();
 
         // 2. Recupera Scuole (Tutte per Admin, Solo propria per altri)
+        // MODIFICA: Aggiunto recupero campo 'abilita_gestore_tariffe'
         let scuoleList = [];
         if (profile.ruolo === 'Admin') {
-            const { data } = await supabase.from('scuole').select('id, nome').order('nome');
+            const { data } = await supabase.from('scuole').select('id, nome, abilita_gestore_tariffe').order('nome');
             scuoleList = data || [];
         } else if (profile.school_id) {
-            const { data } = await supabase.from('scuole').select('id, nome').eq('id', profile.school_id);
+            const { data } = await supabase.from('scuole').select('id, nome, abilita_gestore_tariffe').eq('id', profile.school_id);
             scuoleList = data || [];
         }
         setScuole(scuoleList);
@@ -214,15 +215,10 @@ export default function GestioneTariffe({ userRole, config }) {
   const handleExportData = async () => {
     try {
       setLoading(true);
-      // Nota: pagamenti deve avere school_id o essere filtrato tramite RLS/join
-      // Qui assumiamo che RLS filtri per scuola o che pagamenti abbia i dati corretti
       const { data: pays } = await supabase
         .from('pagamenti')
         .select(`*, alunni(nome, cognome), docenti(nome, cognome)`)
         .eq('anno_accademico', selectedYear.anno);
-
-      // Filtro lato client per sicurezza se non c'è school_id su pagamenti ma su alunni
-      // (Opzionale: migliorare query se pagamenti ha school_id)
       
       if (!pays || pays.length === 0) {
           setLoading(false);
@@ -257,12 +253,26 @@ export default function GestioneTariffe({ userRole, config }) {
     setDialogConfig({ isOpen: true, title, message, type, showCancel: true, onConfirm: () => { onYes(); setDialogConfig(p => ({...p, isOpen:false})); }, onCancel: () => setDialogConfig(p => ({...p, isOpen:false})) });
   };
 
-  // Permessi
+  // --- PERMESSI (MODIFICATO) ---
   const canEdit = () => {
+      // 1. Admin ha sempre accesso
+      if (userRole === 'Admin') return true;
       if (!selectedSchool) return false;
-      if (!config || !config['permessi_tariffe']) return userRole === 'Admin';
-      return Array.isArray(config['permessi_tariffe']) && config['permessi_tariffe'].includes(userRole);
+
+      // 2. Controllo flag specifico della scuola per il ruolo Gestore
+      const currentSchoolObj = scuole.find(s => s.id === selectedSchool);
+      if (userRole === 'Gestore' && currentSchoolObj?.abilita_gestore_tariffe) {
+          return true;
+      }
+
+      // 3. Fallback alla configurazione globale (se necessario)
+      if (config && config['permessi_tariffe'] && Array.isArray(config['permessi_tariffe'])) {
+          return config['permessi_tariffe'].includes(userRole);
+      }
+      
+      return false;
   };
+
   const isLocked = selectedYear?.stato === 'Concluso';
   const isEditable = canEdit() && !isLocked;
 
@@ -309,7 +319,7 @@ export default function GestioneTariffe({ userRole, config }) {
              </div>
 
              {/* Badge */}
-             <div className="flex items-center">
+             <div className="flex items-center gap-2">
                  {selectedYear?.is_current && (
                      <span className="flex items-center gap-1 px-3 py-1 bg-green-500/20 text-green-400 border border-green-500/50 rounded-full text-xs font-bold uppercase tracking-wider">
                         <CheckCircle2 size={14}/> Corrente
@@ -318,6 +328,11 @@ export default function GestioneTariffe({ userRole, config }) {
                  {selectedYear?.stato === 'Concluso' && (
                      <span className="flex items-center gap-1 px-3 py-1 bg-red-900/20 text-red-400 border border-red-900/50 rounded-full text-xs font-bold uppercase tracking-wider">
                         <Lock size={14}/> Concluso
+                     </span>
+                 )}
+                 {!isEditable && selectedSchool && (
+                     <span className="text-[10px] text-gray-500 italic flex items-center gap-1 border border-gray-700 rounded px-2 py-0.5">
+                         <Eye size={10}/> Solo Lettura
                      </span>
                  )}
              </div>
@@ -345,7 +360,7 @@ export default function GestioneTariffe({ userRole, config }) {
         </div>
       </div>
 
-      {/* BODY */}
+      {/* BODY (Il resto rimane invariato ma userà isEditable aggiornato) */}
       <div className="flex-1 overflow-auto p-6 custom-scrollbar space-y-8">
          {!selectedYear ? (
              <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-4">
@@ -435,7 +450,7 @@ export default function GestioneTariffe({ userRole, config }) {
          )}
       </div>
 
-      {/* MODALI */}
+      {/* MODALI (Invariate) */}
       {showYearModal && (
           <ModalNewYear currentYears={years.map(y => y.anno)} onClose={() => setShowYearModal(false)} onSave={handleCreateYear} />
       )}
@@ -458,9 +473,7 @@ export default function GestioneTariffe({ userRole, config }) {
   );
 }
 
-// --- SUB COMPONENTS ---
-
-// 1. Modale Tariffa (AGGIORNATA CON SELECT DAL CATALOGO)
+// Sub components (Invariati)
 function ModalTariffa({ tariffa, anno, schoolId, onClose, onSave }) {
     const [formData, setFormData] = useState({ 
         id: tariffa?.id||null, 
@@ -470,7 +483,6 @@ function ModalTariffa({ tariffa, anno, schoolId, onClose, onSave }) {
     const [availableTypes, setAvailableTypes] = useState([]);
     const [errorMsg, setErrorMsg] = useState('');
 
-    // Fetch Tipi Lezioni Attivi dal Catalogo
     useEffect(() => {
         const fetchTypes = async () => {
             if(!schoolId) return;
@@ -478,7 +490,7 @@ function ModalTariffa({ tariffa, anno, schoolId, onClose, onSave }) {
                 .from('tipi_lezioni')
                 .select('*')
                 .eq('school_id', schoolId)
-                .eq('attivo', true) // Solo attivi
+                .eq('attivo', true)
                 .order('tipo');
             setAvailableTypes(data || []);
         };
@@ -515,7 +527,6 @@ function ModalTariffa({ tariffa, anno, schoolId, onClose, onSave }) {
                 <form onSubmit={handleSubmit} className="space-y-4">
                     <div>
                         <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Tipologia Lezione</label>
-                        {/* SELECT DAL CATALOGO */}
                         <select 
                             value={formData.tipo_lezione} 
                             onChange={e=>setFormData({...formData, tipo_lezione:e.target.value})} 
@@ -544,7 +555,6 @@ function ModalTariffa({ tariffa, anno, schoolId, onClose, onSave }) {
     );
 }
 
-// 2. Modale Quota (Invariata)
 function ModalQuota({ currentQuota, onClose, onSave }) {
     const [val, setVal] = useState(currentQuota);
     return createPortal(
@@ -559,7 +569,6 @@ function ModalQuota({ currentQuota, onClose, onSave }) {
     );
 }
 
-// 3. Modale Nuovo Anno (Invariata)
 function ModalNewYear({ currentYears, onClose, onSave }) {
     const [anno, setAnno] = useState('');
     useEffect(() => {

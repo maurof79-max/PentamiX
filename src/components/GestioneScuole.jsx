@@ -4,7 +4,7 @@ import { supabase } from '../supabaseClient';
 import { 
     Building, Plus, RefreshCw, Check, X, Edit2, MapPin, 
     Phone, User, Smartphone, Mail, FileText, Globe, Layers, 
-    Image as ImageIcon, Grid, Loader 
+    Image as ImageIcon, Grid, Loader, Lock // Aggiunto Lock
 } from 'lucide-react';
 
 export default function GestioneScuole() {
@@ -21,6 +21,7 @@ export default function GestioneScuole() {
 
   const fetchData = async () => {
     setLoading(true);
+    // Nota: abilita_gestore_tariffe sarà recuperato grazie a select('*')
     const { data: sData } = await supabase.from('scuole').select('*').order('created_at');
     setScuole(sData || []);
 
@@ -120,26 +121,43 @@ export default function GestioneScuole() {
                     </div>
                 </div>
 
-                {/* Moduli */}
-                <div className="bg-gray-900/50 p-3 rounded-lg border border-gray-800/50">
-                    <h4 className="text-[10px] font-bold text-gray-500 uppercase mb-2 tracking-widest">Moduli Attivi</h4>
-                    <div className="flex flex-wrap gap-2">
-                        {moduliDisponibili.map(mod => {
-                            const isActive = scuola.moduli_attivi?.includes(mod.codice);
-                            return (
-                                <div
-                                    key={mod.codice}
-                                    className={`flex items-center gap-2 px-3 py-1.5 rounded-md border text-xs font-medium ${
-                                        isActive 
-                                        ? 'bg-green-900/20 border-green-800 text-green-400' 
-                                        : 'bg-gray-800 border-gray-700 text-gray-500 opacity-60'
-                                    }`}
-                                >
-                                    {isActive ? <Check size={12} strokeWidth={3}/> : <X size={12}/>}
-                                    {mod.etichetta}
-                                </div>
-                            )
-                        })}
+                {/* Permessi & Moduli */}
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                    <div className="bg-gray-900/50 p-3 rounded-lg border border-gray-800/50">
+                        <h4 className="text-[10px] font-bold text-gray-500 uppercase mb-2 tracking-widest">Moduli Attivi</h4>
+                        <div className="flex flex-wrap gap-2">
+                            {moduliDisponibili.map(mod => {
+                                const isActive = scuola.moduli_attivi?.includes(mod.codice);
+                                return (
+                                    <div
+                                        key={mod.codice}
+                                        className={`flex items-center gap-2 px-3 py-1.5 rounded-md border text-xs font-medium ${
+                                            isActive 
+                                            ? 'bg-green-900/20 border-green-800 text-green-400' 
+                                            : 'bg-gray-800 border-gray-700 text-gray-500 opacity-60'
+                                        }`}
+                                    >
+                                        {isActive ? <Check size={12} strokeWidth={3}/> : <X size={12}/>}
+                                        {mod.etichetta}
+                                    </div>
+                                )
+                            })}
+                        </div>
+                    </div>
+                    {/* Visualizzazione rapida permessi */}
+                    <div className="bg-gray-900/50 p-3 rounded-lg border border-gray-800/50 flex flex-col justify-center">
+                         <h4 className="text-[10px] font-bold text-gray-500 uppercase mb-2 tracking-widest">Permessi Speciali</h4>
+                         <div className="flex items-center gap-2">
+                             {scuola.abilita_gestore_tariffe ? (
+                                 <span className="flex items-center gap-1.5 px-2 py-1 rounded bg-blue-900/20 text-blue-400 border border-blue-900/30 text-[11px] font-bold">
+                                     <Edit2 size={10}/> Gestore Modifica Tariffe
+                                 </span>
+                             ) : (
+                                 <span className="flex items-center gap-1.5 px-2 py-1 rounded bg-gray-800 text-gray-500 border border-gray-700 text-[11px]">
+                                     <Lock size={10}/> Gestore Sola Lettura Tariffe
+                                 </span>
+                             )}
+                         </div>
                     </div>
                 </div>
             </div>
@@ -180,7 +198,9 @@ function ModalScuola({ scuola, moduliDisponibili, onClose, onSave }) {
         referente: scuola?.referente || '',
         email_referente: scuola?.email_referente || '',
         cellulare: scuola?.cellulare || '',
-        moduli_attivi: scuola?.moduli_attivi || ["anagrafica", "didattica"] 
+        moduli_attivi: scuola?.moduli_attivi || ["anagrafica", "didattica"],
+        // NUOVO CAMPO
+        abilita_gestore_tariffe: scuola?.abilita_gestore_tariffe || false 
     });
     
     // Stati Galleria Immagini
@@ -216,7 +236,6 @@ function ModalScuola({ scuola, moduliDisponibili, onClose, onSave }) {
                 console.error('Error fetching images:', error);
                 alert("Errore nel caricamento della galleria: " + error.message);
             } else {
-                // Filtra solo file (esclude cartelle se presenti)
                 const files = data.filter(item => item.id !== null);
                 setGalleryImages(files);
             }
@@ -228,7 +247,6 @@ function ModalScuola({ scuola, moduliDisponibili, onClose, onSave }) {
     };
 
     const selectImage = (fileName) => {
-        // Ottieni URL pubblico
         const { data } = supabase.storage.from('images').getPublicUrl(fileName);
         if (data && data.publicUrl) {
             setFormData({ ...formData, logo_url: data.publicUrl });
@@ -271,31 +289,30 @@ function ModalScuola({ scuola, moduliDisponibili, onClose, onSave }) {
 
                 <form onSubmit={handleSubmit} className="space-y-6">
                     
-                    {/* RIGA 1: NOME SCUOLA E LOGO PICKER */}
+                    {/* RIGA 1: NOME SCUOLA, SLUG e LOGO */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Nome Scuola / Ragione Sociale *</label>
-                            <input type="text" value={formData.nome} onChange={e => setFormData({...formData, nome: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none" required />
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Nome Scuola / Ragione Sociale *</label>
+                                <input type="text" value={formData.nome} onChange={e => setFormData({...formData, nome: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none" required />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Link Personalizzato (Slug) *</label>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-xs text-gray-600 font-mono">.../login/</span>
+                                    <input 
+                                        type="text" 
+                                        value={formData.slug} 
+                                        onChange={e => setFormData({...formData, slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-')})} 
+                                        className="flex-1 bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none font-mono text-sm" 
+                                        placeholder="es. nome-scuola"
+                                        required
+                                    />
+                                </div>
+                            </div>
                         </div>
-                        <div className="mt-4">
-    <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">
-        Link Personalizzato (Slug) *
-    </label>
-    <div className="flex items-center gap-2">
-        <span className="text-xs text-gray-600 font-mono">.../login/</span>
-        <input 
-            type="text" 
-            value={formData.slug} 
-            onChange={e => setFormData({...formData, slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-')})} 
-            className="flex-1 bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none font-mono text-sm" 
-            placeholder="es. nome-scuola"
-            required
-        />
-    </div>
-    <p className="text-[10px] text-gray-500 mt-1">Identificativo univoco per l'URL di accesso.</p>
-</div>
                         
-                        {/* LOGO PICKER UI */}
+                        {/* LOGO PICKER */}
                         <div>
                             <label className="block text-xs font-bold text-gray-400 mb-1 uppercase flex items-center gap-2">
                                 <ImageIcon size={12}/> Logo Scuola
@@ -312,15 +329,14 @@ function ModalScuola({ scuola, moduliDisponibili, onClose, onSave }) {
                                     type="button"
                                     onClick={fetchImages}
                                     className="px-3 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-gray-300 flex items-center justify-center"
-                                    title="Sfoglia Archivio Immagini"
                                 >
                                     <Grid size={18} />
                                 </button>
                             </div>
                             
-                            {/* MINI GALLERIA A COMPARSA */}
+                            {/* MINI GALLERIA */}
                             {showGallery && (
-                                <div className="mt-2 p-3 bg-gray-900 border border-gray-700 rounded-lg animate-in fade-in slide-in-from-top-2">
+                                <div className="mt-2 p-3 bg-gray-900 border border-gray-700 rounded-lg animate-in fade-in slide-in-from-top-2 relative z-50">
                                     <div className="flex justify-between items-center mb-2 pb-2 border-b border-gray-800">
                                         <span className="text-xs font-bold text-gray-400 uppercase">Seleziona Immagine</span>
                                         <button type="button" onClick={() => setShowGallery(false)}><X size={14} className="text-gray-500 hover:text-white"/></button>
@@ -329,17 +345,15 @@ function ModalScuola({ scuola, moduliDisponibili, onClose, onSave }) {
                                     {loadingGallery ? (
                                         <div className="flex justify-center py-4"><Loader size={20} className="animate-spin text-accademia-red"/></div>
                                     ) : galleryImages.length === 0 ? (
-                                        <div className="text-xs text-gray-500 py-2 text-center">Nessuna immagine trovata in 'images'</div>
+                                        <div className="text-xs text-gray-500 py-2 text-center">Nessuna immagine trovata</div>
                                     ) : (
                                         <div className="grid grid-cols-4 gap-2 max-h-40 overflow-y-auto custom-scrollbar">
                                             {galleryImages.map(img => (
                                                 <div 
                                                     key={img.id} 
                                                     onClick={() => selectImage(img.name)}
-                                                    className="aspect-square bg-gray-800 rounded border border-gray-700 hover:border-accademia-red cursor-pointer flex items-center justify-center overflow-hidden group relative"
-                                                    title={img.name}
+                                                    className="aspect-square bg-gray-800 rounded border border-gray-700 hover:border-accademia-red cursor-pointer flex items-center justify-center overflow-hidden group"
                                                 >
-                                                    {/* Usiamo l'URL pubblico per mostrare l'anteprima */}
                                                     <img 
                                                         src={supabase.storage.from('images').getPublicUrl(img.name).data.publicUrl} 
                                                         alt={img.name}
@@ -354,17 +368,15 @@ function ModalScuola({ scuola, moduliDisponibili, onClose, onSave }) {
                         </div>
                     </div>
 
-                    {/* RESTO DEL FORM (INVARIATO) */}
+                    {/* DATI FISCALI & INDIRIZZO (SEMPLIFICATO PER BREVITÀ, IL CODICE ESISTENTE È OK) */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                         {/* COLONNA SINISTRA */}
                         <div className="space-y-4">
                              <h4 className="text-xs font-bold text-accademia-red uppercase tracking-wider border-b border-gray-800 pb-1">Dati Fiscali & Sede</h4>
-                             
                              <div className="grid grid-cols-2 gap-3">
                                 <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Partita IVA</label><input type="text" value={formData.partita_iva} onChange={e => setFormData({...formData, partita_iva: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none font-mono" /></div>
                                 <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Codice Fiscale</label><input type="text" value={formData.codice_fiscale} onChange={e => setFormData({...formData, codice_fiscale: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none font-mono" /></div>
                              </div>
-
                              <div className="grid grid-cols-4 gap-3">
                                 <div className="col-span-3"><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Indirizzo</label><input type="text" value={formData.indirizzo} onChange={e => setFormData({...formData, indirizzo: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none" /></div>
                                 <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Civico</label><input type="text" value={formData.numero_civico} onChange={e => setFormData({...formData, numero_civico: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none" /></div>
@@ -394,38 +406,68 @@ function ModalScuola({ scuola, moduliDisponibili, onClose, onSave }) {
                         </div>
                     </div>
 
-                    {/* CONFIGURAZIONE MODULI */}
-                    <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700">
-                        <div className="flex items-center gap-2 mb-3">
-                            <Layers className="text-accademia-red" size={18} />
-                            <h4 className="text-sm font-bold text-white uppercase tracking-wider">Configurazione Moduli (Pacchetto)</h4>
+                    {/* CONFIGURAZIONE MODULI & PERMESSI */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* Pacchetto Moduli */}
+                        <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700">
+                            <div className="flex items-center gap-2 mb-3">
+                                <Layers className="text-accademia-red" size={18} />
+                                <h4 className="text-sm font-bold text-white uppercase tracking-wider">Moduli Abilitati</h4>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                                {moduliDisponibili.map(mod => {
+                                    const isActive = formData.moduli_attivi.includes(mod.codice);
+                                    return (
+                                        <button
+                                            key={mod.codice}
+                                            type="button" 
+                                            onClick={() => toggleLocalModulo(mod.codice)}
+                                            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all ${
+                                                isActive 
+                                                ? 'bg-green-900/30 border-green-600 text-green-400' 
+                                                : 'bg-gray-800 border-gray-700 text-gray-500 hover:border-gray-500 hover:text-gray-300'
+                                            }`}
+                                        >
+                                            {isActive ? <Check size={14} strokeWidth={3}/> : <Plus size={14}/>}
+                                            {mod.etichetta}
+                                        </button>
+                                    )
+                                })}
+                            </div>
                         </div>
-                        <div className="flex flex-wrap gap-2">
-                            {moduliDisponibili.map(mod => {
-                                const isActive = formData.moduli_attivi.includes(mod.codice);
-                                return (
-                                    <button
-                                        key={mod.codice}
-                                        type="button" 
-                                        onClick={() => toggleLocalModulo(mod.codice)}
-                                        className={`flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-bold transition-all ${
-                                            isActive 
-                                            ? 'bg-green-900/30 border-green-600 text-green-400' 
-                                            : 'bg-gray-800 border-gray-700 text-gray-500 hover:border-gray-500 hover:text-gray-300'
-                                        }`}
-                                    >
-                                        {isActive ? <Check size={16} strokeWidth={3}/> : <Plus size={16}/>}
-                                        {mod.etichetta}
-                                    </button>
-                                )
-                            })}
+
+                        {/* Permessi Extra */}
+                        <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700">
+                             <div className="flex items-center gap-2 mb-3">
+                                <Lock className="text-accademia-red" size={18} />
+                                <h4 className="text-sm font-bold text-white uppercase tracking-wider">Permessi Ruoli</h4>
+                            </div>
+                            <div className="space-y-3">
+                                <label className="flex items-start gap-3 cursor-pointer group">
+                                    <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors mt-0.5 ${formData.abilita_gestore_tariffe ? 'bg-accademia-red border-accademia-red' : 'bg-gray-800 border-gray-600 group-hover:border-gray-500'}`}>
+                                        <input 
+                                            type="checkbox" 
+                                            className="hidden"
+                                            checked={formData.abilita_gestore_tariffe}
+                                            onChange={e => setFormData({...formData, abilita_gestore_tariffe: e.target.checked})}
+                                        />
+                                        {formData.abilita_gestore_tariffe && <Check size={14} className="text-white" strokeWidth={3} />}
+                                    </div>
+                                    <div>
+                                        <span className={`block text-sm font-bold ${formData.abilita_gestore_tariffe ? 'text-white' : 'text-gray-400'}`}>Abilita modifica Tariffe per "Gestore"</span>
+                                        <p className="text-[10px] text-gray-500 leading-tight mt-1">
+                                            Se attivo, gli utenti con ruolo "Gestore" di questa scuola potranno aggiungere, modificare ed eliminare tariffe e anni accademici.
+                                        </p>
+                                    </div>
+                                </label>
+                            </div>
                         </div>
                     </div>
 
                     <div className="pt-4 border-t border-gray-800 flex justify-end gap-3">
                         <button type="button" onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white transition-colors">Annulla</button>
                         <button type="submit" disabled={loadingSave} className="px-6 py-2 bg-accademia-red hover:bg-red-700 text-white rounded-lg font-bold shadow-lg disabled:opacity-50 transition-all">
-                            {loadingSave ? 'Salvataggio...' : 'Salva'}
+                            {loadingSave ? 'Salvataggio...' : 'Salva Configurazione'}
                         </button>
                     </div>
                 </form>

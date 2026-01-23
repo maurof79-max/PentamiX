@@ -178,6 +178,7 @@ export default function Login() {
                 <label className="block text-xs font-bold text-gray-500 uppercase">Password</label>
                 <button 
                     type="button"
+                    tabIndex={-1}
                     onClick={() => { setError(null); setView('forgot'); }}
                     className="text-xs text-accademia-red hover:text-red-400 transition-colors"
                 >

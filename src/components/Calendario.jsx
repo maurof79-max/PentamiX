@@ -1,7 +1,8 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../supabaseClient';
-import { Plus, RefreshCw, Users, Calendar as CalIcon } from 'lucide-react';
+import { Plus, RefreshCw, Users, Calendar as CalIcon, FileText, Loader2 } from 'lucide-react';
 import ModalEvento from './modals/ModalEvento';
+import { generateWeeklyCalendarPDF } from '../utils/pdfGenerator';
 
 // --- COSTANTI CONFIGURAZIONE GRIGLIA ---
 const DAYS = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato'];
@@ -18,6 +19,9 @@ export default function Calendario({ user }) {
   const [loading, setLoading] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [editingEvent, setEditingEvent] = useState(null);
+  
+  // Stato per il caricamento del PDF
+  const [pdfLoading, setPdfLoading] = useState(false);
 
   // --- INIT & DATI ---
   useEffect(() => {
@@ -25,7 +29,6 @@ export default function Calendario({ user }) {
     if (user.ruolo !== 'Docente') {
       const fetchDocenti = async () => {
         // NOTA: Recuperiamo anche school_id per passarlo al modale
-        // MODIFICA: Aggiunto 'strumento' alla select
         const { data } = await supabase
             .from('docenti')
             .select('id, nome, cognome, school_id, strumento') 
@@ -137,6 +140,32 @@ export default function Calendario({ user }) {
     setShowModal(true);
   };
 
+  const handleDownloadPDF = async () => {
+    if (!selectedDocenteId) return;
+    setPdfLoading(true);
+    
+    try {
+        let docenteName = "Docente";
+        let schoolName = ""; // Opzionale, se disponibile
+
+        if (user.ruolo === 'Docente') {
+            docenteName = `${user.cognome} ${user.nome}`;
+        } else {
+            const doc = docenti.find(d => d.id === selectedDocenteId);
+            if (doc) {
+                docenteName = `${doc.cognome} ${doc.nome}`;
+            }
+        }
+
+        await generateWeeklyCalendarPDF(events, docenteName, schoolName);
+    } catch (error) {
+        console.error("Errore generazione PDF", error);
+        alert("Errore durante la creazione del PDF");
+    } finally {
+        setPdfLoading(false);
+    }
+  };
+
   const timeLabels = useMemo(() => {
     const labels = [];
     for (let i = 0; i < TOTAL_SLOTS; i++) {
@@ -149,7 +178,6 @@ export default function Calendario({ user }) {
   }, []);
 
   // --- CALCOLO VARIABILE MANCANTE ---
-  // Se sono Docente, la scuola è la mia. Se sono Admin, è la scuola del docente che ho selezionato nel menu a tendina.
   const activeSchoolId = user.ruolo === 'Docente' 
     ? user.school_id 
     : (docenti.find(d => d.id === selectedDocenteId)?.school_id || '');
@@ -168,7 +196,6 @@ export default function Calendario({ user }) {
                 onChange={(e) => setSelectedDocenteId(e.target.value)}
               >
                 <option value="">-- Seleziona Docente --</option>
-                {/* MODIFICA: Visualizzazione 'Cognome Nome (strumento)' */}
                 {docenti.map(d => (
                   <option key={d.id} value={d.id}>
                     {d.cognome} {d.nome} {d.strumento ? `(${d.strumento})` : ''}
@@ -193,6 +220,17 @@ export default function Calendario({ user }) {
           >
             <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
           </button>
+
+          {/* --- PULSANTE PDF --- */}
+          <button 
+            onClick={handleDownloadPDF} 
+            disabled={!selectedDocenteId || pdfLoading}
+            className="p-2 text-red-400 hover:text-red-300 hover:bg-red-900/20 rounded-full transition-colors disabled:opacity-50"
+            title="Scarica PDF Settimanale"
+          >
+             {pdfLoading ? <Loader2 size={18} className="animate-spin"/> : <FileText size={18} />}
+          </button>
+
         </div>
 
         <button
@@ -293,7 +331,7 @@ export default function Calendario({ user }) {
           events={events}
           docenteId={selectedDocenteId}
           alunni={alunni}
-          schoolId={activeSchoolId} // ORA LA VARIABILE ESISTE
+          schoolId={activeSchoolId}
           onClose={() => setShowModal(false)}
           onSave={() => { setShowModal(false); loadEvents(); }}
         />

@@ -22,6 +22,7 @@ export default function AlunniList({ userRole }) {
   // Stati Modale e Utente
   const [showModal, setShowModal] = useState(false);
   const [editingAlunno, setEditingAlunno] = useState(null);
+  const [readOnly, setReadOnly] = useState(false); // <--- NUOVO STATO READONLY
   const [currentUser, setCurrentUser] = useState(null);
 
   // Dialogs
@@ -163,7 +164,7 @@ export default function AlunniList({ userRole }) {
                  </span>
              </h3>
              <button 
-                onClick={() => { setEditingAlunno(null); setShowModal(true); }}
+                onClick={() => { setEditingAlunno(null); setReadOnly(false); setShowModal(true); }} // Assicurati di resettare readOnly
                 className="flex items-center gap-2 bg-accademia-red hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm font-medium shadow-sm transition-colors"
              >
                 <Plus size={16} /> Nuovo Alunno
@@ -260,7 +261,16 @@ export default function AlunniList({ userRole }) {
                         </td>
                         <td className="px-6 py-4 text-right">
                              <div className="flex justify-end gap-2">
-                                <button onClick={() => { setEditingAlunno(alunno); setShowModal(true); }} className="p-1.5 hover:bg-gray-700 rounded text-blue-400"><Edit2 size={16}/></button>
+                                {/* PULSANTE OCCHIOLINO (SOLA LETTURA) */}
+                                <button 
+                                    onClick={() => { setEditingAlunno(alunno); setReadOnly(true); setShowModal(true); }} 
+                                    className="p-1.5 hover:bg-gray-700 rounded text-gray-300 hover:text-white transition-colors"
+                                    title="Visualizza Dettagli"
+                                >
+                                    <Eye size={16}/>
+                                </button>
+
+                                <button onClick={() => { setEditingAlunno(alunno); setReadOnly(false); setShowModal(true); }} className="p-1.5 hover:bg-gray-700 rounded text-blue-400"><Edit2 size={16}/></button>
                                 <button onClick={() => handleDelete(alunno)} className="p-1.5 hover:bg-gray-700 rounded text-red-400"><Trash2 size={16}/></button>
                              </div>
                         </td>
@@ -273,6 +283,7 @@ export default function AlunniList({ userRole }) {
       {showModal && (
         <ModalAlunno 
             alunno={editingAlunno} 
+            readOnly={readOnly} // Passa la prop readOnly
             docentiList={docenti} 
             userRole={userRole}
             currentUser={currentUser}
@@ -307,9 +318,10 @@ export default function AlunniList({ userRole }) {
   );
 }
 
-function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClose, onSave }) {
+function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClose, onSave, readOnly }) {
     const isEdit = !!alunno;
-    const [activeTab, setActiveTab] = useState(isEdit ? 'form' : 'search');
+    // Forza la tab 'form' se siamo in readOnly
+    const [activeTab, setActiveTab] = useState((isEdit || readOnly) ? 'form' : 'search');
     const [searchQuery, setSearchQuery] = useState('');
     const [searchResults, setSearchResults] = useState([]);
     const [searching, setSearching] = useState(false);
@@ -361,7 +373,6 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
 
     // --- LOGICA DI RICERCA LIVE (DEBOUNCE) ---
     useEffect(() => {
-        // Funzione di ricerca effettiva
         const performSearch = async () => {
             if (searchQuery.length < 2) {
                 setSearchResults([]);
@@ -399,12 +410,10 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
             }
         };
 
-        // Imposta il timer per il debounce (500ms)
         const timeoutId = setTimeout(() => {
             performSearch();
         }, 500);
 
-        // Pulisce il timer se l'utente digita ancora
         return () => clearTimeout(timeoutId);
 
     }, [searchQuery, currentUser]);
@@ -430,6 +439,8 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
     };
 
     const toggleDocente = (docId) => {
+        // Se in readOnly, impedisci modifiche
+        if (readOnly) return;
         if (userRole === 'Docente') return; 
         setFormData(prev => {
             const isSelected = prev.selectedDocenti.includes(docId);
@@ -444,6 +455,9 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        // Sicurezza: blocca submit se readOnly
+        if (readOnly) return;
+
         setLoading(true);
         try {
             if (userRole === 'Admin' && !formData.school_id) throw new Error("Seleziona una scuola.");
@@ -493,7 +507,8 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
     };
 
     const showDocentiSection = userRole !== 'Docente' || isEdit;
-    const isDocentiReadOnly = userRole === 'Docente';
+    // Blocca docenti se: è un docente loggato (suo alunno), OPPURE siamo in readOnly
+    const isDocentiReadOnly = userRole === 'Docente' || readOnly;
 
     return createPortal(
         <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
@@ -502,13 +517,14 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
                 
                 <div className="flex justify-between items-center mb-4">
                     <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                        {isEdit ? <Edit2 size={20}/> : <UserPlus size={20}/>}
-                        {isEdit ? 'Modifica Scheda Alunno' : 'Gestione Alunno'}
+                        {isEdit ? (readOnly ? <Eye size={20}/> : <Edit2 size={20}/>) : <UserPlus size={20}/>}
+                        {isEdit ? (readOnly ? 'Dettaglio Alunno' : 'Modifica Scheda Alunno') : 'Gestione Alunno'}
                     </h3>
                     <button onClick={onClose}><X className="text-gray-400 hover:text-white"/></button>
                 </div>
 
-                {!alunno && (
+                {/* Nascondi tab Cerca/Crea se siamo in readOnly (non ha senso cambiare) */}
+                {!alunno && !readOnly && (
                     <div className="flex bg-gray-900/50 p-1 rounded-lg mb-6 border border-gray-800">
                         <button onClick={() => setActiveTab('search')} className={`flex-1 py-2 text-sm font-medium rounded-md transition-all flex items-center justify-center gap-2 ${activeTab === 'search' ? 'bg-gray-800 text-white shadow border border-gray-700' : 'text-gray-400 hover:text-gray-200'}`}>
                             <Search size={16}/> Cerca Esistente
@@ -521,7 +537,6 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
 
                 {activeTab === 'search' && (
                     <div className="space-y-4">
-                        {/* INPUT RICERCA LIVE MIGLIORATO */}
                         <div className="relative">
                             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"/>
                             <input 
@@ -553,14 +568,14 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
                     </div>
                 )}
 
-                {/* --- TAB FORM (CREAZIONE/MODIFICA) --- */}
+                {/* --- TAB FORM (CREAZIONE/MODIFICA/VISUALIZZAZIONE) --- */}
                 {activeTab === 'form' && (
                     <form onSubmit={handleSubmit} className="space-y-6">
                         
                         {userRole === 'Admin' && (
                             <div className="p-3 bg-gray-900 border border-gray-700 rounded-lg mb-4">
                                 <label className="block text-xs font-bold text-gray-400 mb-1 uppercase flex items-center gap-1"><Building size={12}/> Scuola</label>
-                                <select value={formData.school_id} onChange={e => setFormData({...formData, school_id: e.target.value})} className="w-full bg-accademia-input border border-gray-600 rounded-lg p-2.5 text-white focus:border-accademia-red focus:outline-none" required>
+                                <select disabled={readOnly} value={formData.school_id} onChange={e => setFormData({...formData, school_id: e.target.value})} className="w-full bg-accademia-input border border-gray-600 rounded-lg p-2.5 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50" required>
                                     <option value="">-- Seleziona Scuola --</option>
                                     {scuole.map(s => <option key={s.id} value={s.id}>{s.nome}</option>)}
                                 </select>
@@ -571,29 +586,29 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
                             <div className="space-y-4">
                                 <h4 className="text-xs font-bold text-accademia-red uppercase tracking-wider border-b border-gray-800 pb-1">Anagrafica Alunno</h4>
                                 <div className="grid grid-cols-2 gap-3">
-                                    <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Nome *</label><input type="text" value={formData.nome} onChange={e => setFormData({...formData, nome: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none" required /></div>
-                                    <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Cognome *</label><input type="text" value={formData.cognome} onChange={e => setFormData({...formData, cognome: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none" required /></div>
+                                    <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Nome *</label><input type="text" disabled={readOnly} value={formData.nome} onChange={e => setFormData({...formData, nome: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50" required /></div>
+                                    <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Cognome *</label><input type="text" disabled={readOnly} value={formData.cognome} onChange={e => setFormData({...formData, cognome: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50" required /></div>
                                 </div>
                                 <div className="grid grid-cols-2 gap-3">
-                                    <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Cellulare</label><input type="tel" value={formData.cellulare} onChange={e => setFormData({...formData, cellulare: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none" /></div>
-                                    <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Email</label><input type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none" /></div>
+                                    <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Cellulare</label><input type="tel" disabled={readOnly} value={formData.cellulare} onChange={e => setFormData({...formData, cellulare: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50" /></div>
+                                    <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Email</label><input type="email" disabled={readOnly} value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50" /></div>
                                 </div>
                                 <div>
                                     <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Stato</label>
-                                    <select value={formData.stato} onChange={e => setFormData({...formData, stato: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none">
+                                    <select disabled={readOnly} value={formData.stato} onChange={e => setFormData({...formData, stato: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50">
                                         <option value="Attivo">Attivo</option><option value="Inattivo">Inattivo</option>
                                     </select>
                                 </div>
                                 <div className="pt-2">
                                     <label className="block text-xs font-bold text-gray-500 mb-2 uppercase">Residenza</label>
                                     <div className="grid grid-cols-4 gap-3 mb-3">
-                                        <div className="col-span-3"><input type="text" placeholder="Indirizzo" value={formData.indirizzo} onChange={e => setFormData({...formData, indirizzo: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white text-xs" /></div>
-                                        <div><input type="text" placeholder="N. Civ" value={formData.numero_civico} onChange={e => setFormData({...formData, numero_civico: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white text-xs" /></div>
+                                        <div className="col-span-3"><input type="text" placeholder="Indirizzo" disabled={readOnly} value={formData.indirizzo} onChange={e => setFormData({...formData, indirizzo: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white text-xs disabled:opacity-50" /></div>
+                                        <div><input type="text" placeholder="N. Civ" disabled={readOnly} value={formData.numero_civico} onChange={e => setFormData({...formData, numero_civico: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white text-xs disabled:opacity-50" /></div>
                                     </div>
                                     <div className="grid grid-cols-3 gap-3">
-                                        <div><input type="text" placeholder="Città" value={formData.paese} onChange={e => setFormData({...formData, paese: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white text-xs" /></div>
-                                        <div><input type="text" placeholder="CAP" value={formData.cap} onChange={e => setFormData({...formData, cap: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white text-xs" maxLength={5} /></div>
-                                        <div><input type="text" placeholder="PR" value={formData.provincia} onChange={e => setFormData({...formData, provincia: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white text-xs uppercase" maxLength={2} /></div>
+                                        <div><input type="text" placeholder="Città" disabled={readOnly} value={formData.paese} onChange={e => setFormData({...formData, paese: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white text-xs disabled:opacity-50" /></div>
+                                        <div><input type="text" placeholder="CAP" disabled={readOnly} value={formData.cap} onChange={e => setFormData({...formData, cap: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white text-xs disabled:opacity-50" maxLength={5} /></div>
+                                        <div><input type="text" placeholder="PR" disabled={readOnly} value={formData.provincia} onChange={e => setFormData({...formData, provincia: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white text-xs uppercase disabled:opacity-50" maxLength={2} /></div>
                                     </div>
                                 </div>
                             </div>
@@ -601,15 +616,15 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
                             <div className="space-y-4">
                                 <h4 className="text-xs font-bold text-accademia-red uppercase tracking-wider border-b border-gray-800 pb-1">Genitore / Referente</h4>
                                 <div className="bg-gray-900/40 p-3 rounded-lg border border-gray-700/50 space-y-3">
-                                    <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Nome Genitore</label><input type="text" value={formData.nome_genitore} onChange={e => setFormData({...formData, nome_genitore: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none" /></div>
+                                    <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Nome Genitore</label><input type="text" disabled={readOnly} value={formData.nome_genitore} onChange={e => setFormData({...formData, nome_genitore: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50" /></div>
                                     <div className="grid grid-cols-2 gap-3">
-                                        <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Email</label><input type="email" value={formData.email_genitore} onChange={e => setFormData({...formData, email_genitore: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none" /></div>
-                                        <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Cellulare</label><input type="tel" value={formData.cellulare_genitore} onChange={e => setFormData({...formData, cellulare_genitore: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none" /></div>
+                                        <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Email</label><input type="email" disabled={readOnly} value={formData.email_genitore} onChange={e => setFormData({...formData, email_genitore: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50" /></div>
+                                        <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Cellulare</label><input type="tel" disabled={readOnly} value={formData.cellulare_genitore} onChange={e => setFormData({...formData, cellulare_genitore: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50" /></div>
                                     </div>
                                 </div>
 
                                 <h4 className="text-xs font-bold text-accademia-red uppercase tracking-wider border-b border-gray-800 pb-1 pt-2">Dati Fiscali</h4>
-                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Codice Fiscale</label><input type="text" value={formData.codice_fiscale} onChange={e => setFormData({...formData, codice_fiscale: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none font-mono uppercase" placeholder="Per emissione ricevuta" /></div>
+                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Codice Fiscale</label><input type="text" disabled={readOnly} value={formData.codice_fiscale} onChange={e => setFormData({...formData, codice_fiscale: e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2.5 text-white focus:border-accademia-red focus:outline-none font-mono uppercase disabled:opacity-50" placeholder="Per emissione ricevuta" /></div>
                             </div>
                         </div>
 
@@ -680,10 +695,14 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
                         )}
 
                         <div className="pt-4 border-t border-gray-800 flex justify-end gap-3">
-                            <button type="button" onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white transition-colors">Annulla</button>
-                            <button type="submit" disabled={loading} className="px-6 py-2 bg-accademia-red hover:bg-red-700 text-white rounded-lg font-bold shadow-lg disabled:opacity-50 transition-all flex items-center gap-2">
-                                <Check size={18}/> Salva
+                            <button type="button" onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white transition-colors">
+                                {readOnly ? "Chiudi" : "Annulla"}
                             </button>
+                            {!readOnly && (
+                                <button type="submit" disabled={loading} className="px-6 py-2 bg-accademia-red hover:bg-red-700 text-white rounded-lg font-bold shadow-lg disabled:opacity-50 transition-all flex items-center gap-2">
+                                    <Check size={18}/> Salva
+                                </button>
+                            )}
                         </div>
                     </form>
                 )}

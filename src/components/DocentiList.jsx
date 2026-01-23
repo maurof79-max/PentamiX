@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { supabase } from '../supabaseClient';
 import { 
     Edit2, Trash2, Plus, X, Search, Smartphone, Mail, Building, 
-    Filter, ArrowUpDown, ArrowUp, ArrowDown, MapPin, BookOpen, Check, Calendar, Loader2
+    Filter, ArrowUpDown, ArrowUp, ArrowDown, MapPin, BookOpen, Check, Calendar, Loader2, Eye
 } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
 
@@ -20,6 +20,7 @@ export default function DocentiList({ userRole }) {
   // Stati Modale
   const [showModal, setShowModal] = useState(false);
   const [editingDocente, setEditingDocente] = useState(null);
+  const [readOnly, setReadOnly] = useState(false); // <--- NUOVO STATO
   const [currentUser, setCurrentUser] = useState(null);
 
   // Dialog
@@ -46,7 +47,6 @@ export default function DocentiList({ userRole }) {
   }, [userRole]);
 
   const fetchDocenti = async () => {
-    // Nota: rimuovi 'cellulare' dalla select se era esplicito, ma con * va bene se la colonna è stata droppata
     const { data, error } = await supabase
       .from('docenti')
       .select('*, scuole(nome)')
@@ -136,7 +136,7 @@ export default function DocentiList({ userRole }) {
                  </span>
              </h3>
              <button 
-                onClick={() => { setEditingDocente(null); setShowModal(true); }}
+                onClick={() => { setEditingDocente(null); setReadOnly(false); setShowModal(true); }}
                 className="flex items-center gap-2 bg-accademia-red hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm font-medium shadow-sm transition-colors"
              >
                 <Plus size={16} /> Nuovo Docente
@@ -207,7 +207,6 @@ export default function DocentiList({ userRole }) {
                         </td>
                         <td className="px-6 py-4 text-gray-400">
                             <div className="flex items-center gap-2"><Mail size={12}/> {docente.email}</div>
-                            {/* Usiamo CELLULARE, non telefono */}
                             {docente.cellulare && <div className="flex items-center gap-2 text-xs mt-1"><Smartphone size={12}/> {docente.cellulare}</div>}
                         </td>
                         <td className="px-6 py-4 text-gray-300">
@@ -225,7 +224,16 @@ export default function DocentiList({ userRole }) {
                         
                         <td className="px-6 py-4 text-right">
                              <div className="flex justify-end gap-2">
-                                <button onClick={() => { setEditingDocente(docente); setShowModal(true); }} className="p-1.5 hover:bg-gray-700 rounded text-blue-400"><Edit2 size={16}/></button>
+                                {/* PULSANTE OCCHIOLINO */}
+                                <button 
+                                    onClick={() => { setEditingDocente(docente); setReadOnly(true); setShowModal(true); }} 
+                                    className="p-1.5 hover:bg-gray-700 rounded text-gray-300 hover:text-white transition-colors"
+                                    title="Visualizza Dettagli"
+                                >
+                                    <Eye size={16}/>
+                                </button>
+
+                                <button onClick={() => { setEditingDocente(docente); setReadOnly(false); setShowModal(true); }} className="p-1.5 hover:bg-gray-700 rounded text-blue-400"><Edit2 size={16}/></button>
                                 <button onClick={() => handleDelete(docente)} className="p-1.5 hover:bg-gray-700 rounded text-red-400"><Trash2 size={16}/></button>
                              </div>
                         </td>
@@ -246,6 +254,7 @@ export default function DocentiList({ userRole }) {
       {showModal && (
         <ModalDocente 
             docente={editingDocente} 
+            readOnly={readOnly}
             userRole={userRole}
             currentUser={currentUser}
             scuole={scuole}
@@ -280,9 +289,9 @@ export default function DocentiList({ userRole }) {
   );
 }
 
-// --- SOSTITUISCI IL COMPONENTE ModalDocente CON QUESTO ---
+// --- COMPONENTE ModalDocente ---
 
-function ModalDocente({ docente, schoolId, onClose, onSave }) {
+function ModalDocente({ docente, schoolId, onClose, onSave, readOnly }) {
     const isEdit = !!docente;
     const [activeTab, setActiveTab] = useState('anagrafica'); // 'anagrafica' | 'competenze' | 'tariffe'
     
@@ -379,6 +388,8 @@ function ModalDocente({ docente, schoolId, onClose, onSave }) {
     };
 
     const toggleLezione = (lezId) => {
+        // Blocca se in sola lettura
+        if (readOnly) return;
         setSelectedLezioni(prev => prev.includes(lezId) ? prev.filter(id => id !== lezId) : [...prev, lezId]);
     };
 
@@ -420,10 +431,10 @@ function ModalDocente({ docente, schoolId, onClose, onSave }) {
                 <div className="flex justify-between items-start mb-6 border-b border-gray-800 pb-4">
                     <div>
                         <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                            {isEdit ? <Edit2 size={20}/> : <Plus size={20}/>} 
-                            {isEdit ? 'Modifica Docente' : 'Nuovo Docente'}
+                            {isEdit ? (readOnly ? <Eye size={20}/> : <Edit2 size={20}/>) : <Plus size={20}/>} 
+                            {isEdit ? (readOnly ? 'Dettaglio Docente' : 'Modifica Docente') : 'Nuovo Docente'}
                         </h3>
-                        {isEdit && <p className="text-xs text-gray-500 mt-1">Gestisci anagrafica completa, competenze e compensi.</p>}
+                        {!readOnly && isEdit && <p className="text-xs text-gray-500 mt-1">Gestisci anagrafica completa, competenze e compensi.</p>}
                     </div>
                     <button onClick={onClose}><X className="text-gray-400 hover:text-white"/></button>
                 </div>
@@ -455,10 +466,10 @@ function ModalDocente({ docente, schoolId, onClose, onSave }) {
                             
                             {/* Sezione Principale */}
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Nome *</label><input type="text" value={formData.nome} onChange={e => handleChange('nome', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" required /></div>
-                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Cognome *</label><input type="text" value={formData.cognome} onChange={e => handleChange('cognome', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" required /></div>
+                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Nome *</label><input type="text" disabled={readOnly} value={formData.nome} onChange={e => handleChange('nome', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed" required /></div>
+                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Cognome *</label><input type="text" disabled={readOnly} value={formData.cognome} onChange={e => handleChange('cognome', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed" required /></div>
                                 <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Stato</label>
-                                    <select value={formData.stato} onChange={e => handleChange('stato', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none">
+                                    <select disabled={readOnly} value={formData.stato} onChange={e => handleChange('stato', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed">
                                         <option value="Attivo">Attivo</option>
                                         <option value="Inattivo">Inattivo</option>
                                     </select>
@@ -467,27 +478,27 @@ function ModalDocente({ docente, schoolId, onClose, onSave }) {
 
                             {/* Contatti e Dati Professionali */}
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Email</label><input type="email" value={formData.email} onChange={e => handleChange('email', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" /></div>
-                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Cellulare</label><input type="tel" value={formData.cellulare} onChange={e => handleChange('cellulare', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" /></div>
-                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">PEC</label><input type="email" value={formData.pec} onChange={e => handleChange('pec', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" /></div>
+                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Email</label><input type="email" disabled={readOnly} value={formData.email} onChange={e => handleChange('email', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed" /></div>
+                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Cellulare</label><input type="tel" disabled={readOnly} value={formData.cellulare} onChange={e => handleChange('cellulare', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed" /></div>
+                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">PEC</label><input type="email" disabled={readOnly} value={formData.pec} onChange={e => handleChange('pec', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed" /></div>
                             </div>
                             
                             {/* Dati Fiscali */}
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-gray-900/30 p-3 rounded-lg border border-gray-800">
-                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Codice Fiscale</label><input type="text" value={formData.codice_fiscale} onChange={e => handleChange('codice_fiscale', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" /></div>
-                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Partita IVA</label><input type="text" value={formData.partita_iva} onChange={e => handleChange('partita_iva', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" /></div>
-                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Strumento</label><input type="text" value={formData.strumento} onChange={e => handleChange('strumento', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" placeholder="Es. Chitarra" /></div>
+                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Codice Fiscale</label><input type="text" disabled={readOnly} value={formData.codice_fiscale} onChange={e => handleChange('codice_fiscale', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed" /></div>
+                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Partita IVA</label><input type="text" disabled={readOnly} value={formData.partita_iva} onChange={e => handleChange('partita_iva', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed" /></div>
+                                <div><label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Strumento</label><input type="text" disabled={readOnly} value={formData.strumento} onChange={e => handleChange('strumento', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed" placeholder="Es. Chitarra" /></div>
                             </div>
 
                             {/* Indirizzo Completo */}
                             <div className="bg-gray-900/30 p-3 rounded-lg border border-gray-800">
                                 <h4 className="text-xs font-bold text-gray-500 uppercase mb-3">Indirizzo di Residenza</h4>
                                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                                    <div className="md:col-span-3"><label className="block text-[10px] text-gray-400 uppercase mb-1">Via / Piazza</label><input type="text" value={formData.indirizzo} onChange={e => handleChange('indirizzo', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" /></div>
-                                    <div><label className="block text-[10px] text-gray-400 uppercase mb-1">N. Civico</label><input type="text" value={formData.numero_civico} onChange={e => handleChange('numero_civico', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" /></div>
-                                    <div><label className="block text-[10px] text-gray-400 uppercase mb-1">CAP</label><input type="text" value={formData.cap} onChange={e => handleChange('cap', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" /></div>
-                                    <div><label className="block text-[10px] text-gray-400 uppercase mb-1">Città / Paese</label><input type="text" value={formData.paese} onChange={e => handleChange('paese', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" /></div>
-                                    <div><label className="block text-[10px] text-gray-400 uppercase mb-1">Provincia</label><input type="text" value={formData.provincia} onChange={e => handleChange('provincia', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" /></div>
+                                    <div className="md:col-span-3"><label className="block text-[10px] text-gray-400 uppercase mb-1">Via / Piazza</label><input type="text" disabled={readOnly} value={formData.indirizzo} onChange={e => handleChange('indirizzo', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed" /></div>
+                                    <div><label className="block text-[10px] text-gray-400 uppercase mb-1">N. Civico</label><input type="text" disabled={readOnly} value={formData.numero_civico} onChange={e => handleChange('numero_civico', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed" /></div>
+                                    <div><label className="block text-[10px] text-gray-400 uppercase mb-1">CAP</label><input type="text" disabled={readOnly} value={formData.cap} onChange={e => handleChange('cap', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed" /></div>
+                                    <div><label className="block text-[10px] text-gray-400 uppercase mb-1">Città / Paese</label><input type="text" disabled={readOnly} value={formData.paese} onChange={e => handleChange('paese', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed" /></div>
+                                    <div><label className="block text-[10px] text-gray-400 uppercase mb-1">Provincia</label><input type="text" disabled={readOnly} value={formData.provincia} onChange={e => handleChange('provincia', e.target.value)} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed" /></div>
                                 </div>
                             </div>
                         </div>
@@ -511,10 +522,14 @@ function ModalDocente({ docente, schoolId, onClose, onSave }) {
                                             <div 
                                                 key={lez.id} 
                                                 onClick={() => toggleLezione(lez.id)}
-                                                className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all select-none group ${
+                                                className={`flex items-center gap-3 p-3 rounded-lg border transition-all select-none group ${
                                                     isSelected 
                                                     ? 'bg-accademia-red/20 border-accademia-red shadow-md' 
-                                                    : 'bg-gray-800/50 border-gray-700 hover:border-gray-500 hover:bg-gray-800'
+                                                    : 'bg-gray-800/50 border-gray-700'
+                                                } ${
+                                                    readOnly 
+                                                    ? 'cursor-default opacity-80' 
+                                                    : 'cursor-pointer hover:border-gray-500 hover:bg-gray-800'
                                                 }`}
                                             >
                                                 <div className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-colors ${isSelected ? 'bg-accademia-red border-accademia-red' : 'border-gray-500 group-hover:border-gray-400'}`}>
@@ -541,46 +556,49 @@ function ModalDocente({ docente, schoolId, onClose, onSave }) {
                                 </div>
                             ) : (
                                 <>
-                                    <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700 shadow-lg">
-                                        <h4 className="text-sm font-bold text-white mb-4 flex items-center gap-2">
-                                            <Plus size={16} className="text-accademia-red"/> Nuova Tariffa Oraria
-                                        </h4>
-                                        <div className="flex gap-4 items-end">
-                                            <div className="flex-1">
-                                                <label className="block text-[10px] text-gray-400 uppercase mb-1">Paga Oraria (€)</label>
-                                                <div className="relative">
-                                                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">€</span>
+                                    {/* Nascondi form aggiunta tariffa se in readOnly */}
+                                    {!readOnly && (
+                                        <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700 shadow-lg">
+                                            <h4 className="text-sm font-bold text-white mb-4 flex items-center gap-2">
+                                                <Plus size={16} className="text-accademia-red"/> Nuova Tariffa Oraria
+                                            </h4>
+                                            <div className="flex gap-4 items-end">
+                                                <div className="flex-1">
+                                                    <label className="block text-[10px] text-gray-400 uppercase mb-1">Paga Oraria (€)</label>
+                                                    <div className="relative">
+                                                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">€</span>
+                                                        <input 
+                                                            type="number" 
+                                                            step="0.50" 
+                                                            placeholder="0.00" 
+                                                            className="w-full bg-accademia-input border border-gray-600 rounded p-2 pl-7 text-white text-sm focus:border-accademia-red focus:outline-none"
+                                                            value={newTariffa.paga_oraria}
+                                                            onChange={e => setNewTariffa({...newTariffa, paga_oraria: e.target.value})}
+                                                        />
+                                                    </div>
+                                                </div>
+                                                <div className="flex-1">
+                                                    <label className="block text-[10px] text-gray-400 uppercase mb-1">Valida dal</label>
                                                     <input 
-                                                        type="number" 
-                                                        step="0.50" 
-                                                        placeholder="0.00" 
-                                                        className="w-full bg-accademia-input border border-gray-600 rounded p-2 pl-7 text-white text-sm focus:border-accademia-red focus:outline-none"
-                                                        value={newTariffa.paga_oraria}
-                                                        onChange={e => setNewTariffa({...newTariffa, paga_oraria: e.target.value})}
+                                                        type="date" 
+                                                        className="w-full bg-accademia-input border border-gray-600 rounded p-2 text-white text-sm focus:border-accademia-red focus:outline-none"
+                                                        value={newTariffa.data_inizio}
+                                                        onChange={e => setNewTariffa({...newTariffa, data_inizio: e.target.value})}
                                                     />
                                                 </div>
+                                                <button 
+                                                    type="button" 
+                                                    onClick={handleAddTariffa}
+                                                    className="bg-green-700 hover:bg-green-600 text-white p-2 rounded-md h-[38px] px-6 font-bold text-sm shadow-md transition-colors"
+                                                >
+                                                    Aggiungi
+                                                </button>
                                             </div>
-                                            <div className="flex-1">
-                                                <label className="block text-[10px] text-gray-400 uppercase mb-1">Valida dal</label>
-                                                <input 
-                                                    type="date" 
-                                                    className="w-full bg-accademia-input border border-gray-600 rounded p-2 text-white text-sm focus:border-accademia-red focus:outline-none"
-                                                    value={newTariffa.data_inizio}
-                                                    onChange={e => setNewTariffa({...newTariffa, data_inizio: e.target.value})}
-                                                />
-                                            </div>
-                                            <button 
-                                                type="button" 
-                                                onClick={handleAddTariffa}
-                                                className="bg-green-700 hover:bg-green-600 text-white p-2 rounded-md h-[38px] px-6 font-bold text-sm shadow-md transition-colors"
-                                            >
-                                                Aggiungi
-                                            </button>
+                                            <p className="text-[10px] text-gray-500 mt-3 flex items-center gap-1">
+                                                <span className="text-accademia-red">*</span> La tariffa sarà applicata a tutte le lezioni svolte a partire dalla data indicata.
+                                            </p>
                                         </div>
-                                        <p className="text-[10px] text-gray-500 mt-3 flex items-center gap-1">
-                                            <span className="text-accademia-red">*</span> La tariffa sarà applicata a tutte le lezioni svolte a partire dalla data indicata.
-                                        </p>
-                                    </div>
+                                    )}
 
                                     <div>
                                         <h4 className="text-sm font-bold text-gray-400 uppercase mb-3 px-1">Storico Tariffe</h4>
@@ -597,7 +615,8 @@ function ModalDocente({ docente, schoolId, onClose, onSave }) {
                                                         <tr>
                                                             <th className="p-3">Data Inizio Validità</th>
                                                             <th className="p-3">Paga Oraria</th>
-                                                            <th className="p-3 text-right">Azioni</th>
+                                                            {/* Nascondi header azioni se readOnly */}
+                                                            {!readOnly && <th className="p-3 text-right">Azioni</th>}
                                                         </tr>
                                                     </thead>
                                                     <tbody className="divide-y divide-gray-800 bg-gray-900/20">
@@ -612,16 +631,19 @@ function ModalDocente({ docente, schoolId, onClose, onSave }) {
                                                                 <td className="p-3 text-white font-mono font-bold text-base">
                                                                     € {t.paga_oraria.toFixed(2)}
                                                                 </td>
-                                                                <td className="p-3 text-right">
-                                                                    <button 
-                                                                        type="button" 
-                                                                        onClick={() => handleDeleteTariffa(t.id)}
-                                                                        className="text-gray-500 hover:text-red-400 p-1.5 rounded-md hover:bg-red-900/20 transition-colors"
-                                                                        title="Elimina Tariffa"
-                                                                    >
-                                                                        <Trash2 size={16}/>
-                                                                    </button>
-                                                                </td>
+                                                                {/* Nascondi azioni se readOnly */}
+                                                                {!readOnly && (
+                                                                    <td className="p-3 text-right">
+                                                                        <button 
+                                                                            type="button" 
+                                                                            onClick={() => handleDeleteTariffa(t.id)}
+                                                                            className="text-gray-500 hover:text-red-400 p-1.5 rounded-md hover:bg-red-900/20 transition-colors"
+                                                                            title="Elimina Tariffa"
+                                                                        >
+                                                                            <Trash2 size={16}/>
+                                                                        </button>
+                                                                    </td>
+                                                                )}
                                                             </tr>
                                                         ))}
                                                     </tbody>
@@ -636,10 +658,15 @@ function ModalDocente({ docente, schoolId, onClose, onSave }) {
 
                     {/* FOOTER ACTIONS */}
                     <div className="flex justify-end gap-3 pt-6 border-t border-gray-800 mt-6">
-                        <button type="button" onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white text-sm transition-colors">Annulla</button>
-                        <button type="submit" className="bg-accademia-red hover:bg-red-700 text-white px-6 py-2 rounded-lg font-bold shadow-lg text-sm transition-all hover:shadow-red-900/20">
-                            {isEdit ? 'Salva Modifiche' : 'Crea Docente'}
+                        <button type="button" onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white text-sm transition-colors">
+                            {readOnly ? "Chiudi" : "Annulla"}
                         </button>
+                        
+                        {!readOnly && (
+                            <button type="submit" className="bg-accademia-red hover:bg-red-700 text-white px-6 py-2 rounded-lg font-bold shadow-lg text-sm transition-all hover:shadow-red-900/20">
+                                {isEdit ? 'Salva Modifiche' : 'Crea Docente'}
+                            </button>
+                        )}
                     </div>
                 </form>
             </div>

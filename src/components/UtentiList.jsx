@@ -114,8 +114,11 @@ export default function UtentiList() {
   };
 
   return (
-    <div className="p-0 relative">
-      <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-900/20">
+    // MODIFICA 1: Aggiunto h-full flex flex-col per gestire l'altezza
+    <div className="h-full flex flex-col relative">
+      
+      {/* Header Fissi (shrink-0 impedisce che si schiaccino) */}
+      <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-900/20 shrink-0">
         <h3 className="text-lg font-light text-white">Amministrazione Accessi</h3>
         <button 
           onClick={() => handleOpenModal(null, false)}
@@ -125,7 +128,7 @@ export default function UtentiList() {
         </button>
       </div>
 
-      <div className="p-4 border-b border-gray-800 bg-gray-900/10 flex flex-col md:flex-row gap-4">
+      <div className="p-4 border-b border-gray-800 bg-gray-900/10 flex flex-col md:flex-row gap-4 shrink-0">
         <div className="relative flex-1">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"/>
             <input 
@@ -154,9 +157,11 @@ export default function UtentiList() {
         )}
       </div>
 
-      <div className="overflow-x-auto custom-scrollbar pb-10">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-gray-900/50 text-gray-400 uppercase text-xs">
+      {/* MODIFICA 2: flex-1 e overflow-auto per abilitare lo scroll verticale */}
+      <div className="flex-1 overflow-auto custom-scrollbar pb-10">
+        <table className="w-full text-left text-sm whitespace-nowrap">
+          {/* MODIFICA 3: sticky header per mantenerlo visibile */}
+          <thead className="bg-gray-900/90 backdrop-blur-md text-gray-400 uppercase text-xs sticky top-0 z-10 shadow-sm">
             <tr>
               <th className="px-6 py-4 font-semibold">Nome Utente</th>
               <th className="px-6 py-4 font-semibold">Email</th>
@@ -265,7 +270,7 @@ export default function UtentiList() {
       {/* --- NUOVO: DIALOGO CONFERMA IMPERSONIFICAZIONE --- */}
       <ConfirmDialog
         isOpen={impersonateConfirm.isOpen}
-        type="warning" // Usa lo stile giallo di avvertimento
+        type="warning" 
         title="Modalità Debug (Ghost)"
         message={`Stai per accedere come ${impersonateConfirm.user?.nome_esteso}. \n\nVedrai l'applicazione esattamente come la vede questo utente. Potrai tornare al tuo ruolo di Admin in qualsiasi momento cliccando sul banner in alto.`}
         confirmText="Procedi"

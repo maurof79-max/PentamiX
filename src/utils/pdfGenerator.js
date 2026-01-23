@@ -230,3 +230,126 @@ export const generateRegistroPDF = async (schoolInfo, filters, data, monthsLabel
   const fileName = `Registro_${schoolInfo.name.replace(/[^a-z0-9]/gi, '_')}_${filters.anno.replace('/','-')}.pdf`;
   doc.save(fileName);
 };
+
+ //* --- GENERAZIONE CALENDARIO SETTIMANALE (A4 LANDSCAPE) ---
+
+export const generateWeeklyCalendarPDF = async (events, docenteName, schoolName) => {
+  const doc = new jsPDF({ orientation: 'landscape' });
+  const pageWidth = doc.internal.pageSize.width;
+
+  // 1. Header
+  const logoBase64 = await getBase64ImageFromURL(LOGO_URL);
+  if (logoBase64) {
+      doc.addImage(logoBase64, 'PNG', 10, 10, 25, 25);
+  }
+
+  doc.setFontSize(18);
+  doc.setTextColor(168, 28, 28); // Rosso Accademia
+  doc.setFont("helvetica", "bold");
+  doc.text("ORARIO SETTIMANALE LEZIONI", 40, 20);
+
+  doc.setFontSize(12);
+  doc.setTextColor(50);
+  doc.setFont("helvetica", "normal");
+  doc.text(`Docente: ${docenteName}`, 40, 28);
+  if (schoolName) doc.text(`Sede: ${schoolName}`, 40, 34);
+
+  // 2. Configurazione Griglia
+  const DAYS = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato'];
+  const START_HOUR = 10;
+  const END_HOUR = 23; 
+  
+  // Genera gli slot orari (righe)
+  const rows = [];
+  for (let h = START_HOUR; h < END_HOUR; h++) {
+      ['00', '30'].forEach(m => {
+          // Salta l'ultimo slot 23:30 se END_HOUR è 23
+          rows.push(`${String(h).padStart(2, '0')}:${m}`);
+      });
+  }
+
+  // 3. Preparazione Dati Tabella
+  // Creiamo una matrice: tableBody[rowIndex][colIndex]
+  // Col 0: Orario, Col 1-6: Giorni
+  const tableBody = rows.map(timeLabel => {
+      const row = [timeLabel]; // Prima colonna: Orario
+      
+      DAYS.forEach(day => {
+          // Trova se c'è un evento che COPRE questo slot
+          // Un evento copre lo slot se:
+          // start_time <= slot_time AND end_time > slot_time
+          
+          const [slotH, slotM] = timeLabel.split(':').map(Number);
+          const slotVal = slotH * 60 + slotM;
+
+          const event = events.find(e => {
+              if (e.giorno_settimana !== day) return false;
+              
+              const [evtH, evtM] = e.ora_inizio.split(':').map(Number);
+              const startVal = evtH * 60 + evtM;
+              const endVal = startVal + e.durata_minuti;
+
+              return slotVal >= startVal && slotVal < endVal;
+          });
+
+          if (event) {
+              // Determina contenuto e colore
+              const [evtH, evtM] = event.ora_inizio.split(':').map(Number);
+              const startVal = evtH * 60 + evtM;
+              
+              // Mostra il testo solo se è lo slot di inizio
+              const isStart = slotVal === startVal;
+              
+              row.push({
+                  content: isStart ? `${event.alunni?.cognome} ${event.alunni?.nome}\n(${event.tipi_lezioni?.tipo})` : '',
+                  styles: { 
+                      fillColor: getEventColorPDF(event.tipi_lezioni?.tipo),
+                      textColor: [255, 255, 255],
+                      fontSize: 8,
+                      fontStyle: 'bold',
+                      valign: 'middle'
+                  }
+              });
+          } else {
+              row.push(''); // Cella vuota
+          }
+      });
+      return row;
+  });
+
+  // 4. Generazione Tabella
+  autoTable(doc, {
+      startY: 40,
+      head: [['Ora', ...DAYS]],
+      body: tableBody,
+      theme: 'grid',
+      styles: {
+          lineColor: [200, 200, 200],
+          lineWidth: 0.1,
+          cellPadding: 1,
+          rowHeight: 10 // Altezza fissa per simulare la griglia temporale
+      },
+      headStyles: {
+          fillColor: [40, 40, 40],
+          textColor: [255, 255, 255],
+          halign: 'center',
+          fontStyle: 'bold',
+          lineWidth: 0
+      },
+      columnStyles: {
+          0: { width: 15, halign: 'center', fontStyle: 'bold', textColor: [100, 100, 100] }, // Colonna Ora
+          // Le altre colonne si adattano
+      }
+  });
+
+  const safeName = docenteName.replace(/[^a-z0-9]/gi, '_');
+  doc.save(`Orario_${safeName}.pdf`);
+};
+
+// Helper per i colori nel PDF (RGB)
+const getEventColorPDF = (tipo) => {
+    const t = (tipo || '').toLowerCase();
+    if (t.includes('teoria')) return [21, 128, 61]; // Green 700
+    if (t.includes('propedeutica')) return [202, 138, 4]; // Yellow 600
+    return [168, 28, 28]; // Accademia Red
+};

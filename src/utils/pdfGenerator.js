@@ -353,3 +353,120 @@ const getEventColorPDF = (tipo) => {
     if (t.includes('propedeutica')) return [202, 138, 4]; // Yellow 600
     return [168, 28, 28]; // Accademia Red
 };
+
+export const generatePaymentsReportPDF = async (schoolInfo, filters, data) => {
+  const doc = new jsPDF();
+  const pageWidth = doc.internal.pageSize.width;
+
+  // --- 1. HEADER ---
+  // Tenta di caricare il logo se presente, altrimenti usa l'header testuale
+  if (schoolInfo.logo) {
+      const logoBase64 = await getBase64ImageFromURL(schoolInfo.logo);
+      if (logoBase64) {
+          doc.addImage(logoBase64, 'PNG', 10, 10, 25, 25);
+      }
+  } else {
+       // Fallback se schoolInfo.logo non è passato, usa URL statico o ometti
+       const logoBase64 = await getBase64ImageFromURL(LOGO_URL);
+       if (logoBase64) doc.addImage(logoBase64, 'PNG', 10, 10, 25, 25);
+  }
+
+  // Intestazione Scuola
+  doc.setFontSize(16);
+  doc.setTextColor(40);
+  doc.setFont("helvetica", "bold");
+  doc.text(schoolInfo.name || "Accademia della Musica", 40, 18);
+
+  // Titolo Documento
+  doc.setFontSize(14);
+  doc.setTextColor(168, 28, 28); // Rosso Accademia
+  doc.text("RIEPILOGO PAGAMENTI", 40, 25);
+
+  // Dettagli Filtri (Alunno e Anno)
+  doc.setFontSize(11);
+  doc.setTextColor(60);
+  doc.setFont("helvetica", "normal");
+  doc.text(`Alunno: ${filters.alunnoName}`, 40, 32);
+  doc.text(`Anno Accademico: ${filters.anno}`, pageWidth - 60, 32);
+
+  // Mesi Selezionati
+  doc.setFontSize(9);
+  doc.setTextColor(100);
+  const mesiStr = filters.monthsLabels && filters.monthsLabels.length > 0 
+    ? filters.monthsLabels.join(', ') 
+    : "Tutti i mesi";
+  
+  const splitMesi = doc.splitTextToSize(`Mesi Rif.: ${mesiStr}`, pageWidth - 50);
+  doc.text(splitMesi, 40, 38);
+
+  let finalY = 38 + (splitMesi.length * 4) + 5;
+
+  // --- 2. TABELLA DATI ---
+  // Ordina per data decrescente
+  const sortedData = data.sort((a, b) => new Date(b.data_pagamento) - new Date(a.data_pagamento));
+
+  const tableBody = sortedData.map(p => {
+    // Recupera etichetta mese se disponibile o usa la data
+    const meseRif = p.mese_rif && p.mese_rif !== 0 
+        ? MESI.find(m => m.val === parseInt(p.mese_rif))?.label 
+        : '-';
+        
+    return [
+      new Date(p.data_pagamento).toLocaleDateString('it-IT'),
+      p.tipologia || 'Pagamento',
+      meseRif, // Colonna Mese Rif
+      p.metodo_pagamento || '-',
+      `€ ${parseFloat(p.importo).toFixed(2)}`
+    ];
+  });
+
+  autoTable(doc, {
+    startY: finalY,
+    head: [['Data', 'Descrizione', 'Mese Rif.', 'Metodo', 'Importo']],
+    body: tableBody,
+    theme: 'grid',
+    headStyles: {
+      fillColor: [168, 28, 28], // Rosso Accademia
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      halign: 'left'
+    },
+    styles: {
+      fontSize: 10,
+      cellPadding: 4,
+      textColor: [50, 50, 50]
+    },
+    columnStyles: {
+      0: { width: 30 },
+      2: { width: 20, halign: 'center' },
+      4: { halign: 'right', fontStyle: 'bold' }
+    }
+  });
+
+  // --- 3. TOTALE ---
+  const totalAmount = sortedData.reduce((acc, curr) => acc + parseFloat(curr.importo || 0), 0);
+  
+  finalY = doc.lastAutoTable.finalY + 10;
+  
+  // Box Totale
+  doc.setFillColor(245, 245, 245);
+  doc.setDrawColor(200, 200, 200);
+  doc.rect(pageWidth - 70, finalY, 60, 12, 'FD');
+  
+  doc.setFontSize(11);
+  doc.setTextColor(50);
+  doc.text("TOTALE VERSATO:", pageWidth - 65, finalY + 8);
+  
+  doc.setFontSize(12);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(21, 128, 61); // Verde scuro
+  doc.text(`€ ${totalAmount.toFixed(2)}`, pageWidth - 15, finalY + 8, { align: 'right' });
+
+  // Footer data generazione
+  doc.setFontSize(8);
+  doc.setTextColor(150);
+  doc.text(`Documento generato il ${new Date().toLocaleDateString('it-IT')}`, 10, doc.internal.pageSize.height - 10);
+
+  const safeName = filters.alunnoName.replace(/[^a-z0-9]/gi, '_');
+  doc.save(`Riepilogo_Pagamenti_${safeName}.pdf`);
+};

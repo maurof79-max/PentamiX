@@ -16,7 +16,10 @@ export default function Login() {
   
   // Stati per la personalizzazione grafica
   const [schoolInfo, setSchoolInfo] = useState(null);
+  
+  // --- NUOVO LOGO PENTAMIX ---
   const DEFAULT_LOGO = "https://mqdpojtisighqjmyzdwz.supabase.co/storage/v1/object/public/images/PentamiX_logo.png";
+  
   const [currentLogo, setCurrentLogo] = useState(DEFAULT_LOGO);
 
   // 2. Appena carica la pagina, se c'è uno slug, cerchiamo la scuola
@@ -36,11 +39,12 @@ export default function Login() {
 
       if (data) {
         setSchoolInfo(data);
+        // Se la scuola ha un logo specifico, usa quello, altrimenti tieni PentamiX
         if (data.logo_url) setCurrentLogo(data.logo_url);
       }
     } catch (err) {
-      console.log("Nessuna scuola trovata con questo link.", err);
-      // In caso di errore restiamo col logo di default
+      console.log("Nessuna scuola trovata con questo link o errore fetch.", err);
+      // In caso di errore restiamo col logo di default (PentamiX)
     }
   };
 
@@ -81,8 +85,8 @@ export default function Login() {
 
       localStorage.setItem('accademia_user', JSON.stringify(userProfile));
       if (schoolSlug) {
-    localStorage.setItem('preferred_school_slug', schoolSlug);
-}
+        localStorage.setItem('preferred_school_slug', schoolSlug);
+      }
       navigate('/dashboard');
 
     } catch (err) {
@@ -104,7 +108,7 @@ export default function Login() {
       if (!user) throw new Error("Email non trovata.");
 
       const token = crypto.randomUUID();
-      const scadenza = Date.now() + 3600000;
+      const scadenza = Date.now() + 3600000; // 1 ora
 
       const { error: updateError } = await supabase
         .from('utenti')
@@ -114,7 +118,7 @@ export default function Login() {
       if (updateError) throw updateError;
 
       const resetLink = `${window.location.origin}/reset-password?token=${token}`;
-      console.log("LINK RECUPERO:", resetLink);
+      console.log("LINK RECUPERO (DEBUG):", resetLink);
       setSuccessMsg("Istruzioni inviate! (Controlla la Console per il link di test)");
       
     } catch (err) {
@@ -146,7 +150,7 @@ export default function Login() {
             {schoolInfo ? schoolInfo.nome : (view === 'login' ? 'Area Riservata' : 'Recupero Password')}
           </h1>
           <p className="text-xs text-accademia-muted mt-2 uppercase tracking-widest">
-            {schoolInfo ? 'Portale Accesso' : 'Accademia della Musica'}
+            {schoolInfo ? 'Portale Accesso' : 'PentamiX'}
           </p>
         </div>
 
@@ -178,7 +182,7 @@ export default function Login() {
                 <label className="block text-xs font-bold text-gray-500 uppercase">Password</label>
                 <button 
                     type="button"
-                    tabIndex={-1}
+                    tabIndex={-1} // SALTA col tasto TAB
                     onClick={() => { setError(null); setView('forgot'); }}
                     className="text-xs text-accademia-red hover:text-red-400 transition-colors"
                 >
@@ -238,7 +242,7 @@ export default function Login() {
       </div>
       
       <div className="absolute bottom-4 text-center w-full text-[10px] text-gray-600 uppercase tracking-widest z-10">
-          © {new Date().getFullYear()} {schoolInfo ? schoolInfo.nome : 'Accademia della Musica'} • Gestionale v2.0
+          © {new Date().getFullYear()} {schoolInfo ? schoolInfo.nome : 'PentamiX'} • Gestionale v2.0
       </div>
     </div>
   );

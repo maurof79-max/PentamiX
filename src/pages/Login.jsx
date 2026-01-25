@@ -16,7 +16,7 @@ export default function Login() {
   
   // Stati per la personalizzazione grafica
   const [schoolInfo, setSchoolInfo] = useState(null);
-  const DEFAULT_LOGO = "https://mqdpojtisighqjmyzdwz.supabase.co/storage/v1/object/public/images/logo-glow.png";
+  const DEFAULT_LOGO = "https://mqdpojtisighqjmyzdwz.supabase.co/storage/v1/object/public/images/PentamiX_logo.png";
   const [currentLogo, setCurrentLogo] = useState(DEFAULT_LOGO);
 
   // 2. Appena carica la pagina, se c'è uno slug, cerchiamo la scuola

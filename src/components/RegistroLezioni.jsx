@@ -142,7 +142,7 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
       let query = supabase
         .from('registro')
         .select(`
-          id, data_lezione, convalidato, anno_accademico, contabilizza_docente, tipo_lezione_id,
+          id, data_lezione, convalidato, anno_accademico, contabilizza_docente, tipo_lezione_id, importo_saldato,
           docenti!inner ( id, nome, cognome, school_id ),
           alunni ( id, nome, cognome ),
           tipi_lezioni ( id, tipo, modalita ) 
@@ -262,6 +262,19 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
   const handleDeleteClick = async (row) => {
     const hasPermission = await checkPermission(row.anno_accademico);
     if (!hasPermission) return;
+
+    if (row.importo_saldato && row.importo_saldato > 0) {
+        setConfirmDialog({
+            isOpen: true,
+            type: 'warning',
+            title: 'Eliminazione non consentita',
+            message: 'Non è possibile eliminare questa lezione perché risulta già saldata (totalmente o parzialmente).',
+            confirmText: 'OK',
+            showCancel: false,
+            onConfirm: () => setConfirmDialog(prev => ({ ...prev, isOpen: false }))
+        });
+        return;
+    }
 
     const isCollettiva = row.tipi_lezioni?.modalita === 'Collettiva';
     

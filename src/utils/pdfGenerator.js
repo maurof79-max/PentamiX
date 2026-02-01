@@ -231,3 +231,67 @@ export const generatePaymentsReportPDF = async (schoolInfo, filters, data) => {
   doc.setFontSize(12).setFont("helvetica", "bold").text(`TOTALE COMPLESSIVO: € ${total.toFixed(2)}`, pageWidth - 10, doc.lastAutoTable.finalY + 10, { align: 'right' });
   doc.save(`Report_Pagamenti_${filters.alunnoName.replace(/\s/g, '_')}.pdf`);
 };
+
+/**
+ * --- GENERAZIONE ORARIO SETTIMANALE DOCENTE ---
+ */
+export const generateWeeklyCalendarPDF = async (events, docenteName, schoolName) => {
+  const doc = new jsPDF();
+  const pageWidth = doc.internal.pageSize.width;
+  const DAYS_ORDER = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica'];
+
+  const logoBase64 = await getBase64ImageFromURL(LOGO_URL);
+  if (logoBase64) doc.addImage(logoBase64, 'PNG', 10, 10, 22, 22);
+
+  doc.setFontSize(16).setFont("helvetica", "bold").text("Orario Settimanale", 35, 18);
+  doc.setFontSize(14).setTextColor(168, 28, 28).text(docenteName, 35, 25);
+  if (schoolName) {
+    doc.setFontSize(10).setTextColor(80).setFont("helvetica", "normal").text(schoolName, 35, 30);
+  }
+
+  let finalY = 40;
+
+  const groupedEvents = {};
+  events.forEach(event => {
+    const day = event.giorno_settimana;
+    if (!groupedEvents[day]) {
+      groupedEvents[day] = [];
+    }
+    groupedEvents[day].push(event);
+  });
+
+  for (const day of DAYS_ORDER) {
+    if (groupedEvents[day] && groupedEvents[day].length > 0) {
+      if (finalY > 260) {
+        doc.addPage();
+        finalY = 20;
+      }
+      
+      doc.setFontSize(12).setFont("helvetica", "bold").setTextColor(0)
+        .text(day, 10, finalY);
+      finalY += 6;
+
+      const tableBody = groupedEvents[day]
+        .sort((a, b) => (a.ora_inizio || '').localeCompare(b.ora_inizio || ''))
+        .map(e => [
+          e.ora_inizio.slice(0, 5),
+          `${e.alunni?.cognome || ''} ${e.alunni?.nome || ''}`,
+          e.tipi_lezioni?.tipo || 'N.D.',
+          `${e.durata_minuti}'`
+        ]);
+
+      autoTable(doc, {
+        startY: finalY,
+        head: [['Ora', 'Alunno', 'Tipo Lezione', 'Durata']],
+        body: tableBody,
+        theme: 'grid',
+        styles: { fontSize: 9, cellPadding: 2 },
+        headStyles: { fillColor: [80, 80, 80] },
+        margin: { left: 10, right: 10 }
+      });
+      finalY = doc.lastAutoTable.finalY + 10;
+    }
+  }
+
+  doc.save(`Orario_Settimanale_${docenteName.replace(/\s/g, '_')}.pdf`);
+};

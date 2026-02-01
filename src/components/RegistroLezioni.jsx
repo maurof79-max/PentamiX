@@ -642,6 +642,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
           .from('tipi_lezioni')
           .select('id')
           .eq('tipo', tariffaSelezionata.tipo_lezione)
+          .eq('school_id', user.school_id)
           .maybeSingle();
 
         if (searchError && searchError.code !== 'PGRST116') throw searchError;

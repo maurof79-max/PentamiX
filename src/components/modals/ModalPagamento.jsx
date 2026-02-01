@@ -94,39 +94,67 @@ export default function ModalPagamento({ item, alunni, user, annoCorrente, onClo
         fetchStandardFee();
     }, [isIscrizione, formData.anno_accademico, formData.alunno_id, isEdit, user, alunni, item?.id]);
 
-    // 3. Fetch Debiti (FIFO)
+    // 3. Fetch Debiti (FIFO) - VERSIONE CORRETTA
     useEffect(() => {
         const fetchUnpaidLessons = async () => {
-            if (isLezioni && formData.alunno_id) {
+            // Verifichiamo di avere i dati necessari per la query
+            if (isLezioni && formData.alunno_id && formData.anno_accademico) {
                 setLoadingDebts(true);
-                const { data: lezioni } = await supabase.from('registro')
-                    .select(`id, data_lezione, importo_saldato, tipi_lezioni ( costo, tipo )`)
-                    .eq('alunno_id', formData.alunno_id)
-                    .order('data_lezione', { ascending: true });
+                try {
+                    // A. Recuperiamo prima le tariffe dell'anno per conoscere i costi
+                    const { data: tariffe } = await supabase
+                        .from('tariffe')
+                        .select('tipo_lezione, costo')
+                        .eq('anno_accademico', formData.anno_accademico);
+                    
+                    const costiMap = {};
+                    tariffe?.forEach(t => {
+                        costiMap[t.tipo_lezione] = t.costo;
+                    });
 
-                if (lezioni) {
-                    let runningTotal = 0;
-                    const debts = lezioni
-                        .map(l => {
-                            const costo = l.tipi_lezioni?.costo || 0;
-                            const saldato = l.importo_saldato || 0;
-                            const residuo = costo - saldato;
-                            return { ...l, costo, saldato, residuo };
-                        })
-                        .filter(l => l.residuo > 0.01) 
-                        .map(l => {
-                            runningTotal += l.residuo; 
-                            return { ...l, cumulative: runningTotal };
-                        });
-                    setUnpaidLessons(debts);
+                    // B. Fetch lezioni dal registro (rimosso 'costo' dalla select interna)
+                    const { data: lezioni, error: lezError } = await supabase
+                        .from('registro')
+                        .select(`
+                            id, 
+                            data_lezione, 
+                            importo_saldato, 
+                            tipi_lezioni!inner ( tipo )
+                        `)
+                        .eq('alunno_id', formData.alunno_id)
+                        .order('data_lezione', { ascending: true });
+
+                    if (lezError) throw lezError;
+
+                    if (lezioni) {
+                        let runningTotal = 0;
+                        const debts = lezioni
+                            .map(l => {
+                                // Recuperiamo il costo dalla mappa tariffe usando il nome del tipo lezione
+                                const costoEffettivo = costiMap[l.tipi_lezioni?.tipo] || 0;
+                                const saldato = l.importo_saldato || 0;
+                                const residuo = costoEffettivo - saldato;
+                                return { ...l, costo: costoEffettivo, saldato, residuo };
+                            })
+                            // Filtriamo solo le lezioni non completamente saldate
+                            .filter(l => l.residuo > 0.01) 
+                            .map(l => {
+                                runningTotal += l.residuo; 
+                                return { ...l, cumulative: runningTotal };
+                            });
+                        setUnpaidLessons(debts);
+                    }
+                } catch (err) {
+                    console.error("Errore nel recupero lezioni non pagate:", err);
+                } finally {
+                    setLoadingDebts(false);
                 }
-                setLoadingDebts(false);
             } else {
                 setUnpaidLessons([]);
             }
         };
         fetchUnpaidLessons();
-    }, [isLezioni, formData.alunno_id]);
+    }, [isLezioni, formData.alunno_id, formData.anno_accademico]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();

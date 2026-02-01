@@ -27,446 +27,207 @@ const getBase64ImageFromURL = (url) => {
     };
     img.onerror = (error) => {
       console.warn("Impossibile caricare immagine per PDF:", url);
-      resolve(null); // Non blocchiamo la generazione se manca il logo
+      resolve(null);
     };
   });
 };
 
+/**
+ * --- GENERAZIONE RICEVUTA SINGOLA (PDF con HTML2PDF) ---
+ */
 export const generateReceiptPDF = async (data) => {
   const element = document.createElement('div');
-  const meseLabel = data.mese_rif && data.mese_rif !== 0 
-    ? MESI.find(m => m.val === parseInt(data.mese_rif))?.label || '-'
-    : null;
+  
+  // Costruzione righe dettaglio lezioni (se presenti)
+  let lezioniHTML = '';
+  if (data.lezioni && data.lezioni.length > 0) {
+    lezioniHTML = `
+      <div style="margin-top: 20px; border: 1px solid #eee; border-radius: 8px; overflow: hidden;">
+        <div style="background: #f8fafc; padding: 8px 15px; font-size: 11px; font-weight: bold; color: #64748b; border-bottom: 1px solid #eee; text-transform: uppercase;">
+          Dettaglio Lezioni Saldate
+        </div>
+        <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+          ${data.lezioni.map(lez => `
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 10px 15px; color: #334155;">${new Date(lez.data).toLocaleDateString('it-IT')}</td>
+              <td style="padding: 10px 15px; color: #334155; font-weight: 500;">${lez.tipo}</td>
+              <td style="padding: 10px 15px; text-align: right; color: #000; font-weight: 600;">€ ${parseFloat(lez.importo_pagato).toFixed(2)}</td>
+            </tr>
+          `).join('')}
+        </table>
+      </div>
+    `;
+  }
 
   element.innerHTML = `
-    <div style="width: 210mm; height: 290mm; padding: 15mm; box-sizing: border-box; background-color: #ffffff; color: #333; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; position: relative;">
+    <div style="width: 210mm; min-height: 290mm; padding: 15mm; box-sizing: border-box; background-color: #ffffff; color: #333; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; position: relative;">
         <div style="display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 20px; border-bottom: 2px solid #a81c1c;">
-            <div style="flex: 1;"><img src="${LOGO_URL}" alt="Logo" style="height: 90px; width: auto; object-fit: contain;" /></div>
-            <div style="flex: 1; text-align: right; font-size: 11px; color: #555; line-height: 1.5;">
+            <div style="flex: 1;"><img src="${LOGO_URL}" alt="Logo" style="height: 80px; width: auto;" /></div>
+            <div style="flex: 1; text-align: right; font-size: 11px; color: #555; line-height: 1.4;">
                 <h4 style="margin: 0 0 5px 0; font-size: 14px; font-weight: bold; color: #000; text-transform: uppercase;">Accademia della Musica</h4>
                 <div style="font-weight: 500;">di Piacenza</div>
-                Vicolo del Guazzo 2<br>29121 PIACENZA<br>Telefono: +39 0523 1748531<br>Email: accademiadellamusica@libero.it
+                Vicolo del Guazzo 2, 29121 PIACENZA<br>
+                Tel: +39 0523 1748531<br>
+                Email: accademiadellamusica@libero.it
             </div>
         </div>
-        <div style="margin-top: 40px; display: flex; justify-content: space-between;">
-            <div><div style="font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 1px;">Data Pagamento</div><div style="font-size: 14px; font-weight: bold;">${data.data_pagamento}</div></div>
-            <div style="text-align: right;"><div style="font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 1px;">Ricevuto Da</div><div style="font-size: 18px; font-weight: bold; color: #000;">${data.alunno_nome}</div><div style="font-size: 12px; color: #666; margin-top: 2px;">Allievo</div></div>
+
+        <div style="margin-top: 30px; display: flex; justify-content: space-between; background: #fdfdfd; padding: 15px; border-radius: 10px; border: 1px solid #f0f0f0;">
+            <div>
+                <div style="font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px;">Data Pagamento</div>
+                <div style="font-size: 14px; font-weight: bold;">${data.data_pagamento}</div>
+                <div style="font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-top: 15px; margin-bottom: 4px;">Ricevuta n°</div>
+                <div style="font-size: 12px; font-family: monospace; color: #555;">${data.receipt_number || 'N/A'}</div>
+            </div>
+            <div style="text-align: right;">
+                <div style="font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px;">Allievo</div>
+                <div style="font-size: 20px; font-weight: 800; color: #000;">${data.alunno_nome}</div>
+                <div style="font-size: 12px; color: #a81c1c; font-weight: 600; margin-top: 2px;">Anno Accademico ${data.aa}</div>
+            </div>
         </div>
-        <div style="margin-top: 50px; margin-bottom: 40px;">
-            <table style="width: 100%; border-collapse: collapse;">
-                <thead style="background-color: #f3f4f6;"><tr><th style="text-align: left; padding: 12px 15px; font-size: 11px; text-transform: uppercase; color: #555; font-weight: 700; letter-spacing: 0.5px;">Descrizione Servizio</th><th style="text-align: right; padding: 12px 15px; font-size: 11px; text-transform: uppercase; color: #555; font-weight: 700; letter-spacing: 0.5px;">Importo</th></tr></thead>
-                <tbody>
-                    <tr style="border-bottom: 1px solid #eee;">
-                        <td style="padding: 20px 15px;">
-                            <div style="font-size: 15px; font-weight: 600; color: #000;">${data.tipologia}</div>
-                            <div style="font-size: 13px; color: #666; margin-top: 4px;">${meseLabel ? `Mensilità: ${meseLabel}` : 'Quota Iscrizione / Altro'} <span style="margin: 0 5px;">•</span> Anno Accademico: ${data.aa || '2025/2026'}</div>
-                            ${data.note ? `<div style="margin-top: 8px; font-size: 12px; font-style: italic; color: #888;">Note: ${data.note}</div>` : ''}
-                        </td>
-                        <td style="padding: 20px 15px; text-align: right; vertical-align: top;"><span style="font-size: 16px; font-weight: 600;">€ ${parseFloat(data.importo).toFixed(2)}</span></td>
-                    </tr>
-                    <tr><td colspan="2" style="height: 50px;"></td></tr>
-                </tbody>
-                <tfoot style="border-top: 2px solid #000;"><tr><td style="padding: 20px 15px; text-align: right; font-size: 14px; font-weight: bold; text-transform: uppercase;">Totale Versato</td><td style="padding: 20px 15px; text-align: right; font-size: 24px; font-weight: 700; color: #a81c1c;">€ ${parseFloat(data.importo).toFixed(2)}</td></tr></tfoot>
-            </table>
+
+        <div style="margin-top: 30px;">
+            <div style="font-size: 11px; color: #888; text-transform: uppercase; margin-bottom: 10px; font-weight: bold;">Causale Principale</div>
+            <div style="font-size: 18px; font-weight: 600; color: #000; border-left: 4px solid #a81c1c; padding-left: 15px;">
+                ${data.tipologia}
+            </div>
+            
+            ${lezioniHTML}
+
+            ${data.note ? `
+              <div style="margin-top: 20px; padding: 10px; background: #fff9f9; border-radius: 5px; font-size: 12px; color: #7f1d1d; border: 1px italic #fecaca;">
+                <strong>Note:</strong> ${data.note}
+              </div>
+            ` : ''}
         </div>
-        <div style="position: absolute; bottom: 40mm; left: 15mm; right: 15mm;">
-            <div style="display: flex; justify-content: space-between; align-items: flex-end;">
-                <div style="font-size: 9px; color: #999; line-height: 1.4;"><p style="margin: 0;">Il presente documento costituisce semplice ricevuta di pagamento.</p><p style="margin: 0; font-weight: bold; color: #555;">NON VALIDO AI FINI FISCALI</p></div>
-                <div style="text-align: center;"><div style="margin-bottom: 40px; font-size: 11px; color: #555;">Firma per quietanza</div><div style="border-bottom: 1px solid #aaa; width: 200px;"></div></div>
+
+        <div style="margin-top: 40px; display: flex; justify-content: flex-end;">
+            <div style="text-align: right; border-top: 2px solid #000; padding-top: 15px; min-width: 200px;">
+                <div style="font-size: 12px; font-weight: bold; color: #555; text-transform: uppercase;">Totale Versato</div>
+                <div style="font-size: 32px; font-weight: 800; color: #a81c1c;">€ ${parseFloat(data.importo).toFixed(2)}</div>
+            </div>
+        </div>
+
+        <div style="margin-top: 60px; display: flex; justify-content: space-between; align-items: flex-end;">
+            <div style="font-size: 9px; color: #999; max-width: 300px;">
+                <p style="margin: 0; font-weight: bold; color: #a81c1c; margin-bottom: 3px;">DOCUMENTO NON VALIDO AI FINI FISCALI</p>
+                <p style="margin: 0; line-height: 1.3;">Il presente documento costituisce semplice ricevuta di pagamento per uso interno dell'Associazione.</p>
+            </div>
+            <div style="text-align: center;">
+                <div style="margin-bottom: 35px; font-size: 11px; color: #555;">Firma per quietanza</div>
+                <div style="border-bottom: 1px solid #aaa; width: 180px;"></div>
             </div>
         </div>
     </div>`;
 
   const safeName = data.alunno_nome.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-  const safeDate = data.data_pagamento.replace(/[^0-9]/g, '-');
-  const opt = { margin: 0, filename: `Ricevuta_${safeName}_${safeDate}.pdf`, image: { type: 'jpeg', quality: 0.98 }, html2canvas: { scale: 2, useCORS: true }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' } };
+  const opt = { 
+    margin: 0, 
+    filename: `Ricevuta_${safeName}.pdf`, 
+    image: { type: 'jpeg', quality: 1 }, 
+    html2canvas: { scale: 3, useCORS: true, logging: false }, 
+    jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' } 
+  };
+  
   await html2pdf().set(opt).from(element).save();
 };
 
 /**
- * --- GENERAZIONE REGISTRO LEZIONI (Multi Pagina Tabellare) ---
+ * --- GENERAZIONE REGISTRO LEZIONI ---
  */
 export const generateRegistroPDF = async (schoolInfo, filters, data, monthsLabels) => {
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.width;
   
-  // --- 1. HEADER (Logo e Intestazione) ---
   if (schoolInfo.logo) {
       const logoBase64 = await getBase64ImageFromURL(schoolInfo.logo);
-      if (logoBase64) {
-          doc.addImage(logoBase64, 'PNG', 10, 10, 25, 25);
-      }
+      if (logoBase64) doc.addImage(logoBase64, 'PNG', 10, 10, 25, 25);
   }
 
-  // Nome Scuola (Grande)
-  doc.setFontSize(16);
-  doc.setTextColor(40);
-  doc.setFont("helvetica", "bold");
-  doc.text(schoolInfo.name || "Accademia della Musica", 40, 18);
+  doc.setFontSize(16).setFont("helvetica", "bold").text(schoolInfo.name || "Accademia della Musica", 40, 18);
+  doc.setFontSize(14).setTextColor(168, 28, 28).text("REGISTRO LEZIONI", 40, 25);
+  doc.setFontSize(10).setTextColor(80).setFont("helvetica", "normal").text(`Anno Accademico: ${filters.anno}`, 40, 31);
   
-  // Titolo Documento
-  doc.setFontSize(14);
-  doc.setTextColor(168, 28, 28); // Rosso Accademia
-  doc.text("REGISTRO LEZIONI", 40, 25);
-
-  // Sottotitoli (Anno e Mesi)
-  doc.setFontSize(10);
-  doc.setTextColor(80);
-  doc.setFont("helvetica", "normal");
-  doc.text(`Anno Accademico: ${filters.anno}`, 40, 31);
-  
-  // --- GESTIONE TESTO MESI (WRAP AUTOMATICO) ---
-  const mesiStr = monthsLabels && monthsLabels.length > 0 ? monthsLabels.join(', ') : "Tutti i mesi";
-  const fullMesiText = `Mesi Rif.: ${mesiStr}`;
-  
-  // Calcolo larghezza massima disponibile per il testo (Page Width - X Offset - Margin Right)
-  const maxTextWidth = pageWidth - 50; 
-  
-  // jsPDF calcola automaticamente come spezzare le righe
-  const wrappedMesiText = doc.splitTextToSize(fullMesiText, maxTextWidth);
-  
+  const mesiStr = monthsLabels?.length > 0 ? monthsLabels.join(', ') : "Tutti i mesi";
+  const wrappedMesiText = doc.splitTextToSize(`Mesi Rif.: ${mesiStr}`, pageWidth - 50);
   doc.text(wrappedMesiText, 40, 36);
 
-  // --- 2. CALCOLO DINAMICO START TABELLA ---
-  // Ogni riga di testo occupa circa 5 unità di altezza.
-  // 36 è la Y di partenza. Aggiungiamo altezza testo + padding.
   let finalY = 36 + (wrappedMesiText.length * 5) + 5;
 
-  // --- 3. RAGGRUPPAMENTO DATI ---
   const groupedData = {};
-  
   data.forEach(row => {
     const docId = row.docenti?.id || 'unknown';
-    const docName = row.docenti ? `${row.docenti.cognome} ${row.docenti.nome}` : 'Docente Sconosciuto';
-    const strumento = row.docenti?.strumento || '';
-    
     if (!groupedData[docId]) {
-      groupedData[docId] = {
-        name: docName,
-        strumento: strumento,
-        lessons: []
+      groupedData[docId] = { 
+        name: row.docenti ? `${row.docenti.cognome} ${row.docenti.nome}` : 'N.D.',
+        strumento: row.docenti?.strumento || '',
+        lessons: [] 
       };
     }
     groupedData[docId].lessons.push(row);
   });
 
-  const sortedDocentiIds = Object.keys(groupedData).sort((a, b) => 
-    groupedData[a].name.localeCompare(groupedData[b].name)
-  );
-
-  // --- 4. GENERAZIONE TABELLE ---
-  sortedDocentiIds.forEach(docId => {
+  Object.keys(groupedData).sort().forEach(docId => {
     const group = groupedData[docId];
-    
-    // Controlla spazio pagina prima del titolo docente
     if (finalY > 260) { doc.addPage(); finalY = 20; }
     
-    // Intestazione Docente (Barra Grigia Sfondo)
-    doc.setFontSize(11);
-    doc.setTextColor(0);
-    doc.setFont("helvetica", "bold");
-    doc.setFillColor(240, 240, 240);
-    doc.rect(10, finalY - 5, pageWidth - 20, 7, 'F'); 
-    doc.text(`${group.name} ${group.strumento ? `(${group.strumento})` : ''}`, 12, finalY);
+    doc.setFontSize(11).setFont("helvetica", "bold").setFillColor(240, 240, 240).rect(10, finalY - 5, pageWidth - 20, 7, 'F'); 
+    doc.setTextColor(0).text(`${group.name} ${group.strumento ? `(${group.strumento})` : ''}`, 12, finalY);
     finalY += 4;
 
-    // Ordina lezioni: Data -> Alunno
-    const sortedLessons = group.lessons.sort((a, b) => {
-        const dateA = new Date(a.data_lezione);
-        const dateB = new Date(b.data_lezione);
-        if (dateA - dateB !== 0) return dateA - dateB;
-        
-        const alunnoA = a.alunni?.cognome || '';
-        const alunnoB = b.alunni?.cognome || '';
-        return alunnoA.localeCompare(alunnoB);
-    });
-
-    const tableBody = sortedLessons.map(l => [
+    const tableBody = group.lessons.sort((a,b) => new Date(a.data_lezione) - new Date(b.data_lezione)).map(l => [
       new Date(l.data_lezione).toLocaleDateString('it-IT'),
-      `${l.alunni?.cognome || 'N.D.'} ${l.alunni?.nome || ''}`,
+      `${l.alunni?.cognome || ''} ${l.alunni?.nome || ''}`,
       l.tipi_lezioni?.tipo || 'N.D.',
-      l.tipi_lezioni?.durata_minuti ? `${l.tipi_lezioni.durata_minuti}'` : '60\'', 
-      l.convalidato ? 'Sì' : '' // "Sì" se validato, vuoto altrimenti
+      l.tipi_lezioni?.durata_minuti ? `${l.tipi_lezioni.durata_minuti}'` : '60\'',
+      l.convalidato ? 'Sì' : ''
     ]);
 
     autoTable(doc, {
       startY: finalY,
-      head: [['Data', 'Alunno', 'Tipo Lezione', 'Dur.', 'Valid.']], // Intestazione "Valid."
+      head: [['Data', 'Alunno', 'Tipo Lezione', 'Dur.', 'Valid.']],
       body: tableBody,
       theme: 'grid',
-      headStyles: { 
-          fillColor: [255, 255, 255], 
-          textColor: [80, 80, 80],
-          lineWidth: 0,
-          fontStyle: 'bold',
-          fontSize: 9,
-          halign: 'left'
-      },
-      styles: { 
-          fontSize: 9, 
-          cellPadding: 3,
-          lineColor: [220, 220, 220],
-          lineWidth: 0.1,
-          textColor: [50, 50, 50]
-      },
-      columnStyles: {
-          0: { width: 25 }, // Data
-          3: { halign: 'center', width: 15 }, // Durata
-          4: { halign: 'center', width: 15 }  // Validato
-      },
-      margin: { left: 10, right: 10 }, // Margini ridotti (10mm)
-      didDrawPage: (data) => {
-          // Footer Numeri Pagina
-          const str = 'Pagina ' + doc.internal.getNumberOfPages();
-          doc.setFontSize(8);
-          doc.setTextColor(150);
-          doc.text(str, pageWidth - 20, doc.internal.pageSize.height - 10);
-      }
+      styles: { fontSize: 8, cellPadding: 2 },
+      headStyles: { fillColor: [80, 80, 80] },
+      margin: { left: 10, right: 10 }
     });
-
     finalY = doc.lastAutoTable.finalY + 10;
   });
 
-  const fileName = `Registro_${schoolInfo.name.replace(/[^a-z0-9]/gi, '_')}_${filters.anno.replace('/','-')}.pdf`;
-  doc.save(fileName);
+  doc.save(`Registro_Lezioni_${filters.anno.replace('/','-')}.pdf`);
 };
 
- //* --- GENERAZIONE CALENDARIO SETTIMANALE (A4 LANDSCAPE) ---
-
-export const generateWeeklyCalendarPDF = async (events, docenteName, schoolName) => {
-  const doc = new jsPDF({ orientation: 'landscape' });
-  const pageWidth = doc.internal.pageSize.width;
-
-  // 1. Header
-  const logoBase64 = await getBase64ImageFromURL(LOGO_URL);
-  if (logoBase64) {
-      doc.addImage(logoBase64, 'PNG', 10, 10, 25, 25);
-  }
-
-  doc.setFontSize(18);
-  doc.setTextColor(168, 28, 28); // Rosso Accademia
-  doc.setFont("helvetica", "bold");
-  doc.text("ORARIO SETTIMANALE LEZIONI", 40, 20);
-
-  doc.setFontSize(12);
-  doc.setTextColor(50);
-  doc.setFont("helvetica", "normal");
-  doc.text(`Docente: ${docenteName}`, 40, 28);
-  if (schoolName) doc.text(`Sede: ${schoolName}`, 40, 34);
-
-  // 2. Configurazione Griglia
-  const DAYS = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato'];
-  const START_HOUR = 10;
-  const END_HOUR = 23; 
-  
-  // Genera gli slot orari (righe)
-  const rows = [];
-  for (let h = START_HOUR; h < END_HOUR; h++) {
-      ['00', '30'].forEach(m => {
-          // Salta l'ultimo slot 23:30 se END_HOUR è 23
-          rows.push(`${String(h).padStart(2, '0')}:${m}`);
-      });
-  }
-
-  // 3. Preparazione Dati Tabella
-  // Creiamo una matrice: tableBody[rowIndex][colIndex]
-  // Col 0: Orario, Col 1-6: Giorni
-  const tableBody = rows.map(timeLabel => {
-      const row = [timeLabel]; // Prima colonna: Orario
-      
-      DAYS.forEach(day => {
-          // Trova se c'è un evento che COPRE questo slot
-          // Un evento copre lo slot se:
-          // start_time <= slot_time AND end_time > slot_time
-          
-          const [slotH, slotM] = timeLabel.split(':').map(Number);
-          const slotVal = slotH * 60 + slotM;
-
-          const event = events.find(e => {
-              if (e.giorno_settimana !== day) return false;
-              
-              const [evtH, evtM] = e.ora_inizio.split(':').map(Number);
-              const startVal = evtH * 60 + evtM;
-              const endVal = startVal + e.durata_minuti;
-
-              return slotVal >= startVal && slotVal < endVal;
-          });
-
-          if (event) {
-              // Determina contenuto e colore
-              const [evtH, evtM] = event.ora_inizio.split(':').map(Number);
-              const startVal = evtH * 60 + evtM;
-              
-              // Mostra il testo solo se è lo slot di inizio
-              const isStart = slotVal === startVal;
-              
-              row.push({
-                  content: isStart ? `${event.alunni?.cognome} ${event.alunni?.nome}\n(${event.tipi_lezioni?.tipo})` : '',
-                  styles: { 
-                      fillColor: getEventColorPDF(event.tipi_lezioni?.tipo),
-                      textColor: [255, 255, 255],
-                      fontSize: 8,
-                      fontStyle: 'bold',
-                      valign: 'middle'
-                  }
-              });
-          } else {
-              row.push(''); // Cella vuota
-          }
-      });
-      return row;
-  });
-
-  // 4. Generazione Tabella
-  autoTable(doc, {
-      startY: 40,
-      head: [['Ora', ...DAYS]],
-      body: tableBody,
-      theme: 'grid',
-      styles: {
-          lineColor: [200, 200, 200],
-          lineWidth: 0.1,
-          cellPadding: 1,
-          rowHeight: 10 // Altezza fissa per simulare la griglia temporale
-      },
-      headStyles: {
-          fillColor: [40, 40, 40],
-          textColor: [255, 255, 255],
-          halign: 'center',
-          fontStyle: 'bold',
-          lineWidth: 0
-      },
-      columnStyles: {
-          0: { width: 15, halign: 'center', fontStyle: 'bold', textColor: [100, 100, 100] }, // Colonna Ora
-          // Le altre colonne si adattano
-      }
-  });
-
-  const safeName = docenteName.replace(/[^a-z0-9]/gi, '_');
-  doc.save(`Orario_${safeName}.pdf`);
-};
-
-// Helper per i colori nel PDF (RGB)
-const getEventColorPDF = (tipo) => {
-    const t = (tipo || '').toLowerCase();
-    if (t.includes('teoria')) return [21, 128, 61]; // Green 700
-    if (t.includes('propedeutica')) return [202, 138, 4]; // Yellow 600
-    return [168, 28, 28]; // Accademia Red
-};
-
+/**
+ * --- GENERAZIONE RIEPILOGO PAGAMENTI (REPORT) ---
+ */
 export const generatePaymentsReportPDF = async (schoolInfo, filters, data) => {
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.width;
 
-  // --- 1. HEADER ---
-  // Tenta di caricare il logo se presente, altrimenti usa l'header testuale
-  if (schoolInfo.logo) {
-      const logoBase64 = await getBase64ImageFromURL(schoolInfo.logo);
-      if (logoBase64) {
-          doc.addImage(logoBase64, 'PNG', 10, 10, 25, 25);
-      }
-  } else {
-       // Fallback se schoolInfo.logo non è passato, usa URL statico o ometti
-       const logoBase64 = await getBase64ImageFromURL(LOGO_URL);
-       if (logoBase64) doc.addImage(logoBase64, 'PNG', 10, 10, 25, 25);
-  }
+  const logoBase64 = await getBase64ImageFromURL(LOGO_URL);
+  if (logoBase64) doc.addImage(logoBase64, 'PNG', 10, 10, 22, 22);
 
-  // Intestazione Scuola
-  doc.setFontSize(16);
-  doc.setTextColor(40);
-  doc.setFont("helvetica", "bold");
-  doc.text(schoolInfo.name || "Accademia della Musica", 40, 18);
-
-  // Titolo Documento
-  doc.setFontSize(14);
-  doc.setTextColor(168, 28, 28); // Rosso Accademia
-  doc.text("RIEPILOGO PAGAMENTI", 40, 25);
-
-  // Dettagli Filtri (Alunno e Anno)
-  doc.setFontSize(11);
-  doc.setTextColor(60);
-  doc.setFont("helvetica", "normal");
-  doc.text(`Alunno: ${filters.alunnoName}`, 40, 32);
-  doc.text(`Anno Accademico: ${filters.anno}`, pageWidth - 60, 32);
-
-  // Mesi Selezionati
-  doc.setFontSize(9);
-  doc.setTextColor(100);
-  const mesiStr = filters.monthsLabels && filters.monthsLabels.length > 0 
-    ? filters.monthsLabels.join(', ') 
-    : "Tutti i mesi";
-  
-  const splitMesi = doc.splitTextToSize(`Mesi Rif.: ${mesiStr}`, pageWidth - 50);
-  doc.text(splitMesi, 40, 38);
-
-  let finalY = 38 + (splitMesi.length * 4) + 5;
-
-  // --- 2. TABELLA DATI ---
-  // Ordina per data decrescente
-  const sortedData = data.sort((a, b) => new Date(b.data_pagamento) - new Date(a.data_pagamento));
-
-  const tableBody = sortedData.map(p => {
-    // Recupera etichetta mese se disponibile o usa la data
-    const meseRif = p.mese_rif && p.mese_rif !== 0 
-        ? MESI.find(m => m.val === parseInt(p.mese_rif))?.label 
-        : '-';
-        
-    return [
-      new Date(p.data_pagamento).toLocaleDateString('it-IT'),
-      p.tipologia || 'Pagamento',
-      meseRif, // Colonna Mese Rif
-      p.metodo_pagamento || '-',
-      `€ ${parseFloat(p.importo).toFixed(2)}`
-    ];
-  });
+  doc.setFontSize(16).setFont("helvetica", "bold").text(schoolInfo.name || "Accademia della Musica", 35, 18);
+  doc.setFontSize(14).setTextColor(168, 28, 28).text("RIEPILOGO VERSAMENTI", 35, 25);
+  doc.setFontSize(11).setTextColor(60).setFont("helvetica", "normal").text(`Alunno: ${filters.alunnoName}`, 10, 42);
+  doc.text(`Anno Accademico: ${filters.anno}`, pageWidth - 10, 42, { align: 'right' });
 
   autoTable(doc, {
-    startY: finalY,
-    head: [['Data', 'Descrizione', 'Mese Rif.', 'Metodo', 'Importo']],
-    body: tableBody,
-    theme: 'grid',
-    headStyles: {
-      fillColor: [168, 28, 28], // Rosso Accademia
-      textColor: [255, 255, 255],
-      fontStyle: 'bold',
-      halign: 'left'
-    },
-    styles: {
-      fontSize: 10,
-      cellPadding: 4,
-      textColor: [50, 50, 50]
-    },
-    columnStyles: {
-      0: { width: 30 },
-      2: { width: 20, halign: 'center' },
-      4: { halign: 'right', fontStyle: 'bold' }
-    }
+    startY: 48,
+    head: [['Data', 'Causale', 'Metodo', 'Importo']],
+    body: data.sort((a,b) => new Date(b.data_pagamento) - new Date(a.data_pagamento)).map(p => [
+      new Date(p.data_pagamento).toLocaleDateString('it-IT'),
+      p.tipologia,
+      p.metodo_pagamento,
+      `€ ${parseFloat(p.importo).toFixed(2)}`
+    ]),
+    theme: 'striped',
+    headStyles: { fillColor: [168, 28, 28] },
+    columnStyles: { 3: { halign: 'right', fontStyle: 'bold' } }
   });
 
-  // --- 3. TOTALE ---
-  const totalAmount = sortedData.reduce((acc, curr) => acc + parseFloat(curr.importo || 0), 0);
-  
-  finalY = doc.lastAutoTable.finalY + 10;
-  
-  // Box Totale
-  doc.setFillColor(245, 245, 245);
-  doc.setDrawColor(200, 200, 200);
-  doc.rect(pageWidth - 70, finalY, 60, 12, 'FD');
-  
-  doc.setFontSize(11);
-  doc.setTextColor(50);
-  doc.text("TOTALE VERSATO:", pageWidth - 65, finalY + 8);
-  
-  doc.setFontSize(12);
-  doc.setFont("helvetica", "bold");
-  doc.setTextColor(21, 128, 61); // Verde scuro
-  doc.text(`€ ${totalAmount.toFixed(2)}`, pageWidth - 15, finalY + 8, { align: 'right' });
-
-  // Footer data generazione
-  doc.setFontSize(8);
-  doc.setTextColor(150);
-  doc.text(`Documento generato il ${new Date().toLocaleDateString('it-IT')}`, 10, doc.internal.pageSize.height - 10);
-
-  const safeName = filters.alunnoName.replace(/[^a-z0-9]/gi, '_');
-  doc.save(`Riepilogo_Pagamenti_${safeName}.pdf`);
+  const total = data.reduce((acc, curr) => acc + parseFloat(curr.importo || 0), 0);
+  doc.setFontSize(12).setFont("helvetica", "bold").text(`TOTALE COMPLESSIVO: € ${total.toFixed(2)}`, pageWidth - 10, doc.lastAutoTable.finalY + 10, { align: 'right' });
+  doc.save(`Report_Pagamenti_${filters.alunnoName.replace(/\s/g, '_')}.pdf`);
 };

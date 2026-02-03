@@ -45,7 +45,8 @@ const GestioneMenu = lazy(() => import('../components/GestioneMenu'));
 const GestioneScuole = lazy(() => import('../components/GestioneScuole')); 
 const CompensiDocenti = lazy(() => import('../components/CompensiDocenti')); 
 const GestioneTipiLezioni = lazy(() => import('../components/GestioneTipiLezioni')); 
-const GestioneTariffe = lazy(() => import('../components/GestioneTariffe'));         
+const GestioneTariffe = lazy(() => import('../components/GestioneTariffe'));
+const RiepilogoAlunni = lazy(() => import('../components/RiepilogoAlunni'));        
 
 export default function Dashboard() {
   const [user, setUser] = useState(null);
@@ -164,6 +165,16 @@ export default function Dashboard() {
                 if (!activeView && groups.length > 0 && groups[0].items.length > 0) {
                     setActiveView(groups[0].items[0].id);
                 }
+
+                // TODO: Remove this when the menu is fully dynamic from the database
+                const finanzaGroup = groups.find(g => g.moduleCode === 'FINANZA');
+                if (finanzaGroup) {
+                    finanzaGroup.items.push({
+                        id: 'riepilogo_alunni',
+                        label: 'Riepilogo Alunni',
+                        icon: <Users size={18} />
+                    });
+                }
             }
         }
 
@@ -261,7 +272,7 @@ export default function Dashboard() {
 
   const handleMenuClick = (viewId) => {
     setActiveView(viewId);
-    if (window.innerWidth < 768 || ['dettaglio_pagamenti', 'finanza', 'compensi-docenti'].includes(viewId)) {
+    if (window.innerWidth < 768 || ['dettaglio_pagamenti', 'finanza', 'compensi-docenti', 'riepilogo_alunni'].includes(viewId)) {
       setIsSidebarOpen(false);
     }
   };
@@ -289,6 +300,7 @@ export default function Dashboard() {
       case 'logs': return <AccessLogs />;
       case 'gestione_menu': return <GestioneMenu />;     
       case 'gestione_scuole': return <GestioneScuole />; 
+      case 'riepilogo_alunni': return <RiepilogoAlunni user={user} />;
       
       default: return <div className="p-10 text-center text-gray-500">Seleziona una voce dal menu</div>;
     }

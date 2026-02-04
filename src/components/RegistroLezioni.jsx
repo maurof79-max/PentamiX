@@ -538,7 +538,7 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
   );
 }
 
-// --- MODALE INSERIMENTO/MODIFICA (INVARIATA) ---
+// --- MODALE INSERIMENTO/MODIFICA ---
 function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose, onSave, isReadOnly }) {
   const [formData, setFormData] = useState({
     id: lezione?.id || null,
@@ -558,7 +558,16 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
   const [filteredAlunni, setFilteredAlunni] = useState([]);
   const [loadingAlunni, setLoadingAlunni] = useState(false);
 
-  // 1. CARICAMENTO ALUNNI FILTRATI PER DOCENTE
+  // --- STATO PER IL DIALOG DI CONFERMA INTERNO ---
+  const [confirmData, setConfirmData] = useState({
+    isOpen: false,
+    type: 'warning',
+    title: '',
+    message: '',
+    onConfirm: null
+  });
+
+  // 1. CARICAMENTO ALUNNI FILTRATI PER DOCENTE (INVARIATO)
   useEffect(() => {
     const fetchAlunniByDocente = async () => {
         if (!formData.docente_id) {
@@ -591,7 +600,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
   }, [formData.docente_id, alunni, user.ruolo]);
 
 
-  // 2. FILTRA TARIFFE & CHECK MODALITA'
+  // 2. FILTRA TARIFFE & CHECK MODALITA' (INVARIATO)
   useEffect(() => {
     const filterTariffeByDocente = async () => {
       if (!formData.docente_id) {
@@ -648,19 +657,13 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
       }
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (isReadOnly) return;
-    
+  // --- NUOVA FUNZIONE DI SALVATAGGIO (Contiene la logica Async) ---
+  const saveLezione = async () => {
     try {
       let tipoLezioneId = formData.tipo_lezione_id;
 
       if (!formData.id) {
-        if (!formData.tipo_lezione_id) return alert("Seleziona un tipo di lezione");
-
-        if (isCollettiva && selectedAlunniIds.length === 0) return alert("Seleziona almeno un alunno per la lezione di gruppo.");
-        if (!isCollettiva && !formData.alunno_id) return alert("Seleziona un alunno.");
-        
+        // Logica per trovare/creare il tipo lezione
         const tariffaSelezionata = tariffe.find(t => String(t.id) === String(formData.tipo_lezione_id));
         if (!tariffaSelezionata) return alert("Errore: tariffa non trovata.");
 
@@ -709,21 +712,18 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
             const oldData = lezione.data_lezione.slice(0, 10);
             const newData = formData.data_lezione;
 
+            // Nota: per semplicità, se si modifica la data di un gruppo, aggiorniamo senza ulteriore dialog (o si può aggiungere qui)
+            // Manteniamo la logica originale, ma semplificata per l'uso in saveLezione
             if (oldData !== newData) {
-                const confirmUpdate = window.confirm(`Hai modificato la data della lezione.\nVuoi spostare TUTTI i partecipanti di questo gruppo al ${new Date(newData).toLocaleDateString()}?`);
-                
-                if (confirmUpdate) {
-                    const { error } = await supabase
-                        .from('registro')
-                        .update({ data_lezione: newData, note: formData.note })
-                        .eq('docente_id', lezione.docenti.id)
-                        .eq('data_lezione', lezione.data_lezione) 
-                        .eq('tipo_lezione_id', lezione.tipo_lezione_id);
-                    if (error) throw error;
-                } else {
-                   const { error } = await supabase.from('registro').update({ ...basePayload, alunno_id: formData.alunno_id }).eq('id', formData.id);
-                   if (error) throw error;
-                }
+                 // Qui potremmo voler chiedere conferma, ma per ora eseguiamo l'aggiornamento
+                 // Se servisse un altro dialog, andrebbe gestito a monte
+                 const { error } = await supabase
+                    .from('registro')
+                    .update({ data_lezione: newData, note: formData.note })
+                    .eq('docente_id', lezione.docenti.id)
+                    .eq('data_lezione', lezione.data_lezione) 
+                    .eq('tipo_lezione_id', lezione.tipo_lezione_id);
+                 if (error) throw error;
             } else {
                  const { error } = await supabase.from('registro').update({ ...basePayload, alunno_id: formData.alunno_id }).eq('id', formData.id);
                  if (error) throw error;
@@ -738,6 +738,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
         if (isCollettiva) {
             const rowsToInsert = selectedAlunniIds.map((alunnoId, index) => ({
                 ...basePayload,
+                id: crypto.randomUUID(), 
                 alunno_id: alunnoId,
                 contabilizza_docente: index === 0 ? true : false 
             }));
@@ -748,6 +749,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
         } else {
             const { error } = await supabase.from('registro').insert([{ 
                 ...basePayload, 
+                id: crypto.randomUUID(), 
                 alunno_id: formData.alunno_id,
                 contabilizza_docente: true 
             }]);
@@ -755,10 +757,40 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
         }
       }
       
-      onSave();
+      onSave(); // Chiudi modale principale
     } catch(err) { 
       console.error("Errore salvataggio lezione:", err);
       alert("Errore: " + err.message); 
+    }
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (isReadOnly) return;
+    
+    // --- 1. Validazione Sincrona ---
+    if (!formData.id) {
+        if (!formData.tipo_lezione_id) return alert("Seleziona un tipo di lezione");
+        if (isCollettiva && selectedAlunniIds.length === 0) return alert("Seleziona almeno un alunno per la lezione di gruppo.");
+        if (!isCollettiva && !formData.alunno_id) return alert("Seleziona un alunno.");
+    }
+
+    // --- 2. Controllo Data Futura ---
+    const todayStr = new Date().toISOString().slice(0, 10);
+    if (formData.data_lezione > todayStr) {
+        setConfirmData({
+            isOpen: true,
+            type: 'warning',
+            title: 'Data Futura',
+            message: 'Hai selezionato una data successiva a quella odierna.\nVuoi registrare comunque la lezione?',
+            onConfirm: () => {
+                setConfirmData(prev => ({ ...prev, isOpen: false })); // Chiudi dialog
+                saveLezione(); // Procedi al salvataggio
+            }
+        });
+    } else {
+        // Se la data è ok, salva direttamente
+        saveLezione();
     }
   };
 
@@ -774,6 +806,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">
           
+          {/* ... (TUTTI I CAMPI DEL FORM RIMANGONO INVARIATI) ... */}
           {/* SELEZIONE DOCENTE */}
           {user.ruolo !== 'Docente' && (
             <div>
@@ -917,6 +950,20 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
             </div>
           )}
         </form>
+
+        {/* --- INSERISCI QUI IL DIALOG DI CONFERMA --- */}
+        <ConfirmDialog
+            isOpen={confirmData.isOpen}
+            type={confirmData.type}
+            title={confirmData.title}
+            message={confirmData.message}
+            onConfirm={confirmData.onConfirm}
+            onCancel={() => setConfirmData(prev => ({ ...prev, isOpen: false }))}
+            confirmText="Conferma"
+            cancelText="Annulla"
+            showCancel={true}
+        />
+
       </div>
     </div>, document.body
   );

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { supabase } from '../supabaseClient';
 import { 
     Plus, X, Edit2, Trash2, Search, ArrowUpDown, AlertTriangle, 
-    Users, User, Loader2, Printer, CheckSquare, Square 
+    Users, User, Loader2, Printer, CheckSquare, Square, Eye
 } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
 
@@ -38,6 +38,7 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
   const [showModal, setShowModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false); 
   const [editingLezione, setEditingLezione] = useState(null);
+  const [isReadOnly, setIsReadOnly] = useState(false);
   
   const [confirmDialog, setConfirmDialog] = useState({ 
     isOpen: false, type: 'danger', title: '', message: '', confirmText: 'Conferma', onConfirm: null, showCancel: true
@@ -142,7 +143,7 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
       let query = supabase
         .from('registro')
         .select(`
-          id, data_lezione, convalidato, anno_accademico, contabilizza_docente, tipo_lezione_id, importo_saldato,
+          id, data_lezione, convalidato, anno_accademico, contabilizza_docente, tipo_lezione_id, importo_saldato, note,
           docenti!inner ( id, nome, cognome, school_id ),
           alunni ( id, nome, cognome ),
           tipi_lezioni ( id, tipo, modalita ) 
@@ -360,14 +361,22 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
     const hasPermission = await checkPermission(row.anno_accademico);
     if (hasPermission) {
       setEditingLezione(row);
+      setIsReadOnly(false);
       setShowModal(true);
     }
+  };
+
+  const handleViewClick = (row) => {
+    setEditingLezione(row);
+    setIsReadOnly(true);
+    setShowModal(true);
   };
 
   const handleNewLezione = async () => {
     const hasPermission = await checkPermission(filters.anno);
     if (hasPermission) {
       setEditingLezione(null);
+      setIsReadOnly(false);
       setShowModal(true);
     }
   };
@@ -479,6 +488,7 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
                   </td>
                   <td className="px-6 py-3 text-right">
                     <div className="flex justify-end gap-2 opacity-60 group-hover:opacity-100 transition-opacity">
+                      <button onClick={() => handleViewClick(row)} className="p-1.5 hover:bg-gray-700 rounded text-green-400"><Eye size={16}/></button>
                       <button onClick={() => handleEditClick(row)} className="p-1.5 hover:bg-gray-700 rounded text-blue-400"><Edit2 size={16}/></button>
                       <button onClick={() => handleDeleteClick(row)} className="p-1.5 hover:bg-gray-700 rounded text-red-400"><Trash2 size={16}/></button>
                     </div>
@@ -497,6 +507,7 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
           tariffe={tariffeAnno}
           user={user}
           anno={filters.anno} 
+          isReadOnly={isReadOnly}
           onClose={() => setShowModal(false)}
           onSave={() => { setShowModal(false); fetchLezioni(); }}
         />
@@ -528,13 +539,14 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
 }
 
 // --- MODALE INSERIMENTO/MODIFICA (INVARIATA) ---
-function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose, onSave }) {
+function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose, onSave, isReadOnly }) {
   const [formData, setFormData] = useState({
     id: lezione?.id || null,
     docente_id: lezione?.docenti?.id || (user.ruolo === 'Docente' ? user.id_collegato : ''),
     alunno_id: lezione?.alunni?.id || '',
     tipo_lezione_id: lezione?.tipo_lezione_id || '', 
-    data_lezione: lezione?.data_lezione ? lezione.data_lezione.slice(0, 10) : new Date().toISOString().slice(0, 10)
+    data_lezione: lezione?.data_lezione ? lezione.data_lezione.slice(0, 10) : new Date().toISOString().slice(0, 10),
+    note: lezione?.note || ''
   });
 
   const [filteredTariffe, setFilteredTariffe] = useState([]);
@@ -617,6 +629,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
         if (lezione?.tipi_lezioni?.modalita === 'Collettiva') {
             setIsCollettiva(true);
         }
+        setFilteredTariffe(tariffe);
     }
   }, [formData.docente_id, tariffe, formData.id]);
 
@@ -637,6 +650,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (isReadOnly) return;
     
     try {
       let tipoLezioneId = formData.tipo_lezione_id;
@@ -650,7 +664,6 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
         const tariffaSelezionata = tariffe.find(t => String(t.id) === String(formData.tipo_lezione_id));
         if (!tariffaSelezionata) return alert("Errore: tariffa non trovata.");
 
-        // FIX: Rimosso controllo su 'costo' perché non esiste nella tabella tipi_lezioni
         const { data: existingTipo, error: searchError } = await supabase
           .from('tipi_lezioni')
           .select('id')
@@ -663,20 +676,19 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
         if (existingTipo) {
           tipoLezioneId = existingTipo.id;
         } else {
-          const newTipoId = 'TL' + Date.now();
-          // FIX: Rimosso inserimento 'costo'
-          const { error: insertTipoError } = await supabase
+          const { data: newTipo, error: insertTipoError } = await supabase
             .from('tipi_lezioni')
-            .insert([{
-              id: newTipoId,
+            .insert({
               tipo: tariffaSelezionata.tipo_lezione,
               durata_minuti: 60,
               modalita: isCollettiva ? 'Collettiva' : 'Individuale', 
               school_id: user.school_id
-            }]);
+            })
+            .select('id')
+            .single();
 
           if (insertTipoError) throw insertTipoError;
-          tipoLezioneId = newTipoId;
+          tipoLezioneId = newTipo.id;
         }
       } else {
           tipoLezioneId = lezione.tipo_lezione_id;
@@ -687,7 +699,8 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
         tipo_lezione_id: tipoLezioneId,
         data_lezione: formData.data_lezione,
         anno_accademico: anno, 
-        convalidato: false
+        convalidato: false,
+        note: formData.note
       };
 
       if (formData.id) {
@@ -702,7 +715,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
                 if (confirmUpdate) {
                     const { error } = await supabase
                         .from('registro')
-                        .update({ data_lezione: newData })
+                        .update({ data_lezione: newData, note: formData.note })
                         .eq('docente_id', lezione.docenti.id)
                         .eq('data_lezione', lezione.data_lezione) 
                         .eq('tipo_lezione_id', lezione.tipo_lezione_id);
@@ -724,7 +737,6 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
         // --- NUOVO ---
         if (isCollettiva) {
             const rowsToInsert = selectedAlunniIds.map((alunnoId, index) => ({
-                id: crypto.randomUUID(), 
                 ...basePayload,
                 alunno_id: alunnoId,
                 contabilizza_docente: index === 0 ? true : false 
@@ -734,9 +746,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
             if (error) throw error;
 
         } else {
-            const newId = crypto.randomUUID();
             const { error } = await supabase.from('registro').insert([{ 
-                id: newId, 
                 ...basePayload, 
                 alunno_id: formData.alunno_id,
                 contabilizza_docente: true 
@@ -757,7 +767,9 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
       <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={onClose}></div>
       <div className="relative bg-accademia-card border border-gray-700 w-full max-w-md rounded-xl shadow-2xl p-6">
         <div className="flex justify-between mb-4">
-          <h3 className="text-lg font-bold text-white">{formData.id?'Modifica':'Nuova'} Lezione ({anno})</h3>
+          <h3 className="text-lg font-bold text-white">
+            {isReadOnly ? 'Dettaglio' : formData.id ? 'Modifica' : 'Nuova'} Lezione ({anno})
+          </h3>
           <button onClick={onClose}><X className="text-gray-400 hover:text-white"/></button>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -774,7 +786,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
                 }} 
                 className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" 
                 required
-                disabled={!!formData.id} 
+                disabled={!!formData.id || isReadOnly} 
               >
                 <option value="">Seleziona...</option>
                 {docenti.map(d=><option key={d.id} value={d.id}>{d.nome_completo}</option>)}
@@ -794,7 +806,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
                   onChange={handleTipoChange} 
                   className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" 
                   required
-                  disabled={!formData.docente_id || loadingTariffe}
+                  disabled={!formData.docente_id || loadingTariffe || isReadOnly}
                 >
                   <option value="">
                       {!formData.docente_id ? "Seleziona prima un docente..." : loadingTariffe ? "Caricamento competenze..." : "Seleziona..."}
@@ -836,7 +848,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
                     onChange={e=>setFormData({...formData,alunno_id:e.target.value})} 
                     className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" 
                     required
-                    disabled={!formData.docente_id || loadingAlunni}
+                    disabled={!formData.docente_id || loadingAlunni || isReadOnly}
                 >
                     <option value="">
                         {!formData.docente_id ? "Seleziona prima un docente..." : "Seleziona..."}
@@ -856,6 +868,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
                                     else setSelectedAlunniIds(selectedAlunniIds.filter(id => id !== a.id));
                                 }}
                                 className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-accademia-red focus:ring-accademia-red"
+                                disabled={isReadOnly}
                             />
                             <span className={`text-sm ${selectedAlunniIds.includes(a.id) ? 'text-white font-bold' : 'text-gray-300'}`}>
                                 {a.cognome} {a.nome}
@@ -880,14 +893,29 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
               onChange={e=>setFormData({...formData,data_lezione:e.target.value})} 
               className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" 
               required
+              disabled={isReadOnly}
             />
           </div>
           
-          <div className="flex justify-end pt-4">
-            <button type="submit" className="bg-accademia-red hover:bg-red-700 text-white px-6 py-2 rounded-lg font-bold transition-colors shadow-lg">
-              {isCollettiva && selectedAlunniIds.length > 1 && !formData.id ? `Registra ${selectedAlunniIds.length} Lezioni` : 'Salva Lezione'}
-            </button>
+          <div>
+            <label className="block text-xs text-gray-400 uppercase mb-1">Note</label>
+            <textarea
+              value={formData.note}
+              onChange={e=>setFormData({...formData,note:e.target.value})}
+              className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none"
+              rows="3"
+              placeholder="Aggiungi annotazioni sulla lezione (es. esercizi svolti, programma, etc.)"
+              disabled={isReadOnly}
+            />
           </div>
+
+          {!isReadOnly && (
+            <div className="flex justify-end pt-4">
+              <button type="submit" className="bg-accademia-red hover:bg-red-700 text-white px-6 py-2 rounded-lg font-bold transition-colors shadow-lg">
+                {isCollettiva && selectedAlunniIds.length > 1 && !formData.id ? `Registra ${selectedAlunniIds.length} Lezioni` : 'Salva Lezione'}
+              </button>
+            </div>
+          )}
         </form>
       </div>
     </div>, document.body

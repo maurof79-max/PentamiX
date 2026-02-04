@@ -289,10 +289,39 @@ export default function AlunniList({ userRole }) {
             currentUser={currentUser}
             scuole={scuole}
             onClose={() => setShowModal(false)}
-            onSave={(msg) => { 
+            onSave={(msg, savedAlunno, originalAlunno) => { 
                 setShowModal(false); 
                 fetchAlunni(currentUser); 
-                setDialogConfig({ isOpen: true, type: 'success', title: 'Completato', message: msg });
+
+                if (originalAlunno && originalAlunno.stato === 'Attivo' && savedAlunno.stato === 'Inattivo') {
+                    setConfirmDialog({
+                        isOpen: true,
+                        type: 'warning',
+                        title: 'Elimina Pianificazione Settimanale',
+                        message: `L'alunno ${savedAlunno.nome} ${savedAlunno.cognome} è stato reso inattivo. Vuoi eliminare le sue lezioni ricorrenti da tutti i calendari settimanali dei docenti?`,
+                        confirmText: "Sì, elimina pianificazione",
+                        cancelText: "No, mantienila",
+                        onConfirm: async () => {
+                            const { error } = await supabase
+                                .from('calendario')
+                                .delete()
+                                .eq('alunno_id', savedAlunno.id);
+
+                            if (error) {
+                                setDialogConfig({ isOpen: true, type: 'error', title: 'Errore Eliminazione', message: error.message });
+                            } else {
+                                setDialogConfig({ isOpen: true, type: 'success', title: 'Completato', message: 'Alunno disattivato e pianificazione eliminata con successo.' });
+                            }
+                            setConfirmDialog({ ...confirmDialog, isOpen: false });
+                        },
+                        onCancel: () => {
+                            setDialogConfig({ isOpen: true, type: 'info', title: 'Operazione Annullata', message: 'Alunno disattivato, ma la pianificazione settimanale è stata mantenuta.' });
+                            setConfirmDialog({ ...confirmDialog, isOpen: false });
+                        }
+                    });
+                } else {
+                    setDialogConfig({ isOpen: true, type: 'success', title: 'Completato', message: msg });
+                }
             }}
         />
       )}
@@ -498,7 +527,12 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
                 if (assocError) throw assocError;
             }
 
-            onSave(formData.id ? "Alunno aggiornato." : "Nuovo alunno creato e associato.");
+            const savedData = { ...payload, id: alunnoId };
+            onSave(
+                formData.id ? "Alunno aggiornato." : "Nuovo alunno creato e associato.",
+                savedData,
+                alunno
+            );
         } catch (err) {
             alert("Errore: " + err.message);
         } finally {

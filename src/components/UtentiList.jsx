@@ -89,10 +89,28 @@ export default function UtentiList() {
   };
 
   const handleDelete = async (user) => {
+    if (!user || !user.id) {
+        alert("Errore: Impossibile eliminare l'utente. ID utente non valido.");
+        return;
+    }
     if (!confirm(`Sei sicuro di voler rimuovere l'accesso a ${user.nome_esteso}?`)) return;
-    const { error } = await supabase.from('utenti').delete().eq('id', user.id);
-    if (error) alert("Errore durante l'eliminazione: " + error.message);
-    else fetchUtenti();
+
+    // Prima, elimina l'utente dalla tabella 'utenti' del database
+    const { error: dbError } = await supabase.from('utenti').delete().eq('id', user.id);
+
+    if (dbError) {
+        alert("Errore durante l'eliminazione dal database: " + dbError.message);
+        return;
+    }
+
+    // Qui, idealmente, dovresti chiamare una funzione di backend (Edge Function)
+    // per eliminare l'utente anche da Supabase Auth in modo sicuro.
+    // Poiché non possiamo farlo direttamente dal client in modo sicuro,
+    // per ora ci limitiamo a rimuoverlo dal DB e aggiornare la UI.
+    // NOTA: L'utente esisterà ancora in Auth, ma non potrà usare l'app.
+    
+    alert('Utente eliminato con successo dal database.');
+    fetchUtenti();
   };
 
   // --- 1. APERTURA DIALOGO IMPERSONIFICAZIONE ---
@@ -299,6 +317,13 @@ function ModalUtente({ user, docenti, scuole, currentUser, readOnly, onClose, on
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    // Se il ruolo è Admin, la scuola deve essere null
+    if (formData.ruolo === 'Admin') {
+        setFormData(prev => ({ ...prev, school_id: '' }));
+    }
+  }, [formData.ruolo]);
+
+  useEffect(() => {
     if (!isEdit && currentUser?.ruolo !== 'Admin' && currentUser?.school_id) {
         setFormData(prev => ({ ...prev, school_id: currentUser.school_id }));
     }
@@ -315,18 +340,27 @@ function ModalUtente({ user, docenti, scuole, currentUser, readOnly, onClose, on
 
     setLoading(true);
 
+    // Copia i dati e imposta school_id a null se il ruolo è Admin
+    const dataToSubmit = {
+        ...formData,
+        school_id: formData.ruolo === 'Admin' ? null : formData.school_id,
+        id_collegato: formData.ruolo === 'Docente' ? formData.id_collegato : null,
+    };
+
     try {
-      if (!formData.school_id) throw new Error("Devi selezionare una scuola di appartenenza.");
+      if (dataToSubmit.ruolo !== 'Admin' && !dataToSubmit.school_id) {
+        throw new Error("Devi selezionare una scuola di appartenenza per questo ruolo.");
+      }
 
       if (isEdit) {
         // UPDATE
         const { error } = await supabase
           .from('utenti')
           .update({
-            nome_esteso: formData.nome_esteso,
-            ruolo: formData.ruolo,
-            id_collegato: formData.ruolo === 'Docente' ? formData.id_collegato : null,
-            school_id: formData.school_id 
+            nome_esteso: dataToSubmit.nome_esteso,
+            ruolo: dataToSubmit.ruolo,
+            id_collegato: dataToSubmit.id_collegato,
+            school_id: dataToSubmit.school_id 
           })
           .eq('id', user.id);
 
@@ -335,7 +369,7 @@ function ModalUtente({ user, docenti, scuole, currentUser, readOnly, onClose, on
 
       } else {
         // CREATE
-        if (!formData.password || formData.password.length < 6) throw new Error("La password deve essere di almeno 6 caratteri.");
+        if (!dataToSubmit.password || dataToSubmit.password.length < 6) throw new Error("La password deve essere di almeno 6 caratteri.");
 
         const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
         const supabaseKey = import.meta.env.VITE_SUPABASE_KEY;
@@ -346,8 +380,8 @@ function ModalUtente({ user, docenti, scuole, currentUser, readOnly, onClose, on
         });
 
         const { data: authData, error: authError } = await tempClient.auth.signUp({
-          email: formData.email,
-          password: formData.password,
+          email: dataToSubmit.email,
+          password: dataToSubmit.password,
         });
 
         if (authError) throw authError;
@@ -357,18 +391,18 @@ function ModalUtente({ user, docenti, scuole, currentUser, readOnly, onClose, on
           .from('utenti')
           .insert([{
             id: authData.user.id,
-            email: formData.email,
-            nome_esteso: formData.nome_esteso,
-            ruolo: formData.ruolo,
+            email: dataToSubmit.email,
+            nome_esteso: dataToSubmit.nome_esteso,
+            ruolo: dataToSubmit.ruolo,
             stato: 'Attivo',
-            id_collegato: formData.ruolo === 'Docente' ? formData.id_collegato : null,
+            id_collegato: dataToSubmit.id_collegato,
             must_change_password: true,
-            school_id: formData.school_id 
+            school_id: dataToSubmit.school_id 
           }]);
 
         if (profileError) throw new Error("Utente Auth creato, ma errore DB Profilo: " + profileError.message);
 
-        onSave("Utente Creato", `Utente creato per la scuola selezionata!\nEmail: ${formData.email}\nPassword: ${formData.password}`);
+        onSave("Utente Creato", `Utente creato con successo!\nEmail: ${dataToSubmit.email}\nPassword: ${dataToSubmit.password}`);
       }
     } catch(err) {
       alert("Errore: " + err.message);
@@ -399,15 +433,17 @@ function ModalUtente({ user, docenti, scuole, currentUser, readOnly, onClose, on
                   value={formData.school_id} 
                   onChange={e => setFormData({...formData, school_id: e.target.value})} 
                   className="w-full bg-accademia-input border border-gray-600 rounded-lg p-2.5 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
-                  required
-                  disabled={readOnly} 
+                  required={formData.ruolo !== 'Admin'}
+                  disabled={readOnly || formData.ruolo === 'Admin'} 
                 >
-                  <option value="">-- Seleziona Scuola --</option>
+                  <option value="">
+                    {formData.ruolo === 'Admin' ? 'N/A per Admin' : '-- Seleziona Scuola --'}
+                  </option>
                   {scuole.map(s => (
                       <option key={s.id} value={s.id}>{s.nome}</option>
                   ))}
                 </select>
-                {!readOnly && <p className="text-[10px] text-gray-500 mt-1">L'utente vedrà solo i dati di questa scuola.</p>}
+                {!readOnly && formData.ruolo !== 'Admin' && <p className="text-[10px] text-gray-500 mt-1">L'utente vedrà solo i dati di questa scuola.</p>}
              </div>
           )}
 
@@ -464,7 +500,7 @@ function ModalUtente({ user, docenti, scuole, currentUser, readOnly, onClose, on
                 value={formData.id_collegato} 
                 onChange={e => setFormData({...formData, id_collegato: e.target.value})} 
                 className="w-full bg-accademia-input border border-gray-700 rounded-lg p-2.5 text-white focus:border-accademia-red focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={!formData.school_id || readOnly} 
+                disabled={!formData.school_id || readOnly || formData.ruolo === 'Admin'} 
               >
                 <option value="">
                     {formData.school_id ? "-- Seleziona Docente --" : "-- Seleziona prima una Scuola --"}

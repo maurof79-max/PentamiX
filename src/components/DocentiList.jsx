@@ -114,7 +114,7 @@ export default function DocentiList({ userRole }) {
         onConfirm: async () => {
             const { error } = await supabase.from('docenti').delete().eq('id', docente.id);
             if (error) {
-                setDialogConfig({ isOpen: true, type: 'error', title: 'Errore', message: error.message });
+                setDialogConfig({ isOpen: true, type: 'danger', title: 'Errore', message: error.message });
             } else {
                 fetchDocenti();
                 setConfirmDialog({ ...confirmDialog, isOpen: false });
@@ -264,6 +264,8 @@ export default function DocentiList({ userRole }) {
                 fetchDocenti();
                 setDialogConfig({ isOpen: true, type: 'success', title: 'Completato', message: msg });
             }}
+            setDialogConfig={setDialogConfig}
+            setConfirmDialog={setConfirmDialog}
         />
       )}
 
@@ -291,7 +293,7 @@ export default function DocentiList({ userRole }) {
 
 // --- COMPONENTE ModalDocente ---
 
-function ModalDocente({ docente, schoolId, onClose, onSave, readOnly }) {
+function ModalDocente({ docente, schoolId, onClose, onSave, readOnly, setDialogConfig, setConfirmDialog }) {
     const isEdit = !!docente;
     const [activeTab, setActiveTab] = useState('anagrafica'); // 'anagrafica' | 'competenze' | 'tariffe'
     
@@ -366,7 +368,9 @@ function ModalDocente({ docente, schoolId, onClose, onSave, readOnly }) {
     };
 
     const handleAddTariffa = async () => {
-        if (!newTariffa.paga_oraria || !newTariffa.data_inizio) return alert("Inserisci importo e data");
+        if (!newTariffa.paga_oraria || !newTariffa.data_inizio) {
+            return setDialogConfig({ isOpen: true, type: 'warning', title: 'Dati Mancanti', message: 'Inserisci importo e data di inizio validità.' });
+        }
         
         const { error } = await supabase.from('docenti_tariffe').insert([{
             docente_id: docente.id, // ID testuale del docente
@@ -374,17 +378,30 @@ function ModalDocente({ docente, schoolId, onClose, onSave, readOnly }) {
             data_inizio: newTariffa.data_inizio
         }]);
 
-        if (error) alert("Errore inserimento tariffa: " + error.message);
-        else {
+        if (error) {
+            setDialogConfig({ isOpen: true, type: 'danger', title: 'Errore Inserimento', message: error.message });
+        } else {
             setNewTariffa({ paga_oraria: '', data_inizio: '' });
             fetchTariffe();
         }
     };
 
     const handleDeleteTariffa = async (id) => {
-        if(!confirm("Eliminare questa tariffa storico?")) return;
-        const { error } = await supabase.from('docenti_tariffe').delete().eq('id', id);
-        if (!error) fetchTariffe();
+        setConfirmDialog({
+            isOpen: true,
+            type: 'danger',
+            title: 'Elimina Tariffa',
+            message: 'Sei sicuro di voler eliminare questa tariffa dallo storico?',
+            onConfirm: async () => {
+                const { error } = await supabase.from('docenti_tariffe').delete().eq('id', id);
+                if (error) {
+                    setDialogConfig({ isOpen: true, type: 'danger', title: 'Errore', message: error.message });
+                } else {
+                    fetchTariffe();
+                }
+                setConfirmDialog(d => ({ ...d, isOpen: false }));
+            }
+        });
     };
 
     const toggleLezione = (lezId) => {
@@ -402,10 +419,16 @@ function ModalDocente({ docente, schoolId, onClose, onSave, readOnly }) {
 
         if (isEdit) {
             const { error } = await supabase.from('docenti').update(payload).eq('id', docenteId);
-            if (error) return alert("Errore aggiornamento: " + error.message);
+            if (error) {
+                setDialogConfig({ isOpen: true, type: 'danger', title: 'Errore Aggiornamento', message: error.message });
+                return;
+            }
         } else {
             const { data, error } = await supabase.from('docenti').insert([payload]).select().single();
-            if (error) return alert("Errore creazione: " + error.message);
+            if (error) {
+                setDialogConfig({ isOpen: true, type: 'danger', title: 'Errore Creazione', message: error.message });
+                return;
+            }
             docenteId = data.id;
         }
 

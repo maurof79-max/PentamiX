@@ -46,7 +46,7 @@ export default function ConfirmDialog({
   const config = configs[type] || configs.info;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
       <div className={`bg-[#1a1a1a] border ${config.border} w-full max-w-md rounded-xl shadow-2xl p-6 transform transition-all scale-100`}>
         
         <div className="flex flex-col items-center text-center">

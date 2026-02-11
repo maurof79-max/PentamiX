@@ -22,7 +22,7 @@ export default function AlunniList({ userRole }) {
   // Stati Modale e Utente
   const [showModal, setShowModal] = useState(false);
   const [editingAlunno, setEditingAlunno] = useState(null);
-  const [readOnly, setReadOnly] = useState(false); // <--- NUOVO STATO READONLY
+  const [readOnly, setReadOnly] = useState(false); 
   const [currentUser, setCurrentUser] = useState(null);
 
   // Dialogs
@@ -142,7 +142,7 @@ export default function AlunniList({ userRole }) {
         onConfirm: async () => {
             const { error } = await supabase.from('alunni').delete().eq('id', alunno.id);
             if (error) {
-                setDialogConfig({ isOpen: true, type: 'error', title: 'Errore', message: error.message });
+                setDialogConfig({ isOpen: true, type: 'danger', title: 'Errore', message: error.message });
             } else {
                 fetchAlunni(currentUser);
                 setConfirmDialog({ ...confirmDialog, isOpen: false });
@@ -164,7 +164,7 @@ export default function AlunniList({ userRole }) {
                  </span>
              </h3>
              <button 
-                onClick={() => { setEditingAlunno(null); setReadOnly(false); setShowModal(true); }} // Assicurati di resettare readOnly
+                onClick={() => { setEditingAlunno(null); setReadOnly(false); setShowModal(true); }} 
                 className="flex items-center gap-2 bg-accademia-red hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm font-medium shadow-sm transition-colors"
              >
                 <Plus size={16} /> Nuovo Alunno
@@ -261,7 +261,6 @@ export default function AlunniList({ userRole }) {
                         </td>
                         <td className="px-6 py-4 text-right">
                              <div className="flex justify-end gap-2">
-                                {/* PULSANTE OCCHIOLINO (SOLA LETTURA) */}
                                 <button 
                                     onClick={() => { setEditingAlunno(alunno); setReadOnly(true); setShowModal(true); }} 
                                     className="p-1.5 hover:bg-gray-700 rounded text-gray-300 hover:text-white transition-colors"
@@ -283,11 +282,12 @@ export default function AlunniList({ userRole }) {
       {showModal && (
         <ModalAlunno 
             alunno={editingAlunno} 
-            readOnly={readOnly} // Passa la prop readOnly
+            readOnly={readOnly}
             docentiList={docenti} 
             userRole={userRole}
             currentUser={currentUser}
             scuole={scuole}
+            setDialogConfig={setDialogConfig}
             onClose={() => setShowModal(false)}
             onSave={(msg, savedAlunno, originalAlunno) => { 
                 setShowModal(false); 
@@ -308,7 +308,7 @@ export default function AlunniList({ userRole }) {
                                 .eq('alunno_id', savedAlunno.id);
 
                             if (error) {
-                                setDialogConfig({ isOpen: true, type: 'error', title: 'Errore Eliminazione', message: error.message });
+                                setDialogConfig({ isOpen: true, type: 'danger', title: 'Errore Eliminazione', message: error.message });
                             } else {
                                 setDialogConfig({ isOpen: true, type: 'success', title: 'Completato', message: 'Alunno disattivato e pianificazione eliminata con successo.' });
                             }
@@ -347,9 +347,8 @@ export default function AlunniList({ userRole }) {
   );
 }
 
-function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClose, onSave, readOnly }) {
+function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClose, onSave, readOnly, setDialogConfig }) {
     const isEdit = !!alunno;
-    // Forza la tab 'form' se siamo in readOnly
     const [activeTab, setActiveTab] = useState((isEdit || readOnly) ? 'form' : 'search');
     const [searchQuery, setSearchQuery] = useState('');
     const [searchResults, setSearchResults] = useState([]);
@@ -378,6 +377,7 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
     });
     
     const [loading, setLoading] = useState(false);
+    const [formError, setFormError] = useState('');
 
     useEffect(() => {
         if (!isEdit && userRole !== 'Admin') {
@@ -468,7 +468,6 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
     };
 
     const toggleDocente = (docId) => {
-        // Se in readOnly, impedisci modifiche
         if (readOnly) return;
         if (userRole === 'Docente') return; 
         setFormData(prev => {
@@ -484,12 +483,18 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        // Sicurezza: blocca submit se readOnly
         if (readOnly) return;
 
         setLoading(true);
+        setFormError('');
+
         try {
-            if (userRole === 'Admin' && !formData.school_id) throw new Error("Seleziona una scuola.");
+            if (userRole === 'Admin' && !formData.school_id) {
+                throw new Error("Seleziona una scuola.");
+            }
+            if (!formData.nome || !formData.cognome) {
+                throw new Error("Nome e Cognome sono campi obbligatori.");
+            }
 
             const payload = {
                 nome: formData.nome, cognome: formData.cognome, email: formData.email, cellulare: formData.cellulare,
@@ -500,18 +505,29 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
                 codice_fiscale: formData.codice_fiscale ? formData.codice_fiscale.toUpperCase() : ''
             };
 
+            // Rimuovi le proprietà vuote per evitare errori di cast in Supabase
+            Object.keys(payload).forEach(key => {
+                if (payload[key] === '' || payload[key] === null) {
+                    delete payload[key];
+                }
+            });
+
             let alunnoId = formData.id;
+            let originalAlunno = alunno;
 
             if (alunnoId) {
                 const { error } = await supabase.from('alunni').update(payload).eq('id', alunnoId);
                 if (error) throw error;
             } else {
-                const { data, error } = await supabase.from('alunni').insert([payload]).select('id').single();
+                const { data, error } = await supabase.from('alunni').insert([payload]).select().single();
                 if (error) throw error;
                 alunnoId = data.id;
+                originalAlunno = null; // È una creazione, non c'è un originale
             }
-
-            await supabase.from('associazioni').delete().eq('alunno_id', alunnoId);
+            
+            // Gestione Associazioni
+            const { error: deleteAssocError } = await supabase.from('associazioni').delete().eq('alunno_id', alunnoId);
+            if (deleteAssocError) throw deleteAssocError;
             
             let finalSelectedDocenti = [...formData.selectedDocenti];
             if (userRole === 'Docente' && currentUser?.id_collegato && !finalSelectedDocenti.includes(currentUser.id_collegato)) {
@@ -531,17 +547,28 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
             onSave(
                 formData.id ? "Alunno aggiornato." : "Nuovo alunno creato e associato.",
                 savedData,
-                alunno
+                originalAlunno
             );
+
         } catch (err) {
-            alert("Errore: " + err.message);
+            if (err.code === '23505' && err.message) {
+                 if (err.message.includes('alunni_email_key')) {
+                    setFormError("Errore: L'indirizzo email inserito è già utilizzato da un altro alunno.");
+                } else if (err.message.includes('alunni_nome_cognome_school_id_key')) {
+                    setFormError("Errore: Esiste già un alunno con questo Nome e Cognome nella stessa scuola.");
+                } else {
+                    setFormError("Errore di duplicazione: l'alunno non può essere salvato perché alcuni dati sono già presenti.");
+                }
+            } else {
+                setFormError(err.message || 'Si è verificato un errore imprevisto.');
+                console.error("Errore salvataggio:", err);
+            }
         } finally {
             setLoading(false);
         }
     };
 
     const showDocentiSection = userRole !== 'Docente' || isEdit;
-    // Blocca docenti se: è un docente loggato (suo alunno), OPPURE siamo in readOnly
     const isDocentiReadOnly = userRole === 'Docente' || readOnly;
 
     return createPortal(
@@ -557,7 +584,6 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
                     <button onClick={onClose}><X className="text-gray-400 hover:text-white"/></button>
                 </div>
 
-                {/* Nascondi tab Cerca/Crea se siamo in readOnly (non ha senso cambiare) */}
                 {!alunno && !readOnly && (
                     <div className="flex bg-gray-900/50 p-1 rounded-lg mb-6 border border-gray-800">
                         <button onClick={() => setActiveTab('search')} className={`flex-1 py-2 text-sm font-medium rounded-md transition-all flex items-center justify-center gap-2 ${activeTab === 'search' ? 'bg-gray-800 text-white shadow border border-gray-700' : 'text-gray-400 hover:text-gray-200'}`}>
@@ -728,15 +754,26 @@ function ModalAlunno({ alunno, docentiList, userRole, currentUser, scuole, onClo
                             </div>
                         )}
 
-                        <div className="pt-4 border-t border-gray-800 flex justify-end gap-3">
-                            <button type="button" onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white transition-colors">
-                                {readOnly ? "Chiudi" : "Annulla"}
-                            </button>
-                            {!readOnly && (
-                                <button type="submit" disabled={loading} className="px-6 py-2 bg-accademia-red hover:bg-red-700 text-white rounded-lg font-bold shadow-lg disabled:opacity-50 transition-all flex items-center gap-2">
-                                    <Check size={18}/> Salva
-                                </button>
+                        <div className="pt-4 border-t border-gray-800">
+                             {formError && (
+                                <div className="bg-red-900/30 border border-red-700 text-red-300 text-sm p-3 rounded-lg mb-4 text-center">
+                                    {formError}
+                                </div>
                             )}
+                            <div className="flex justify-end gap-3">
+                                <button type="button" onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white transition-colors">
+                                    {readOnly ? "Chiudi" : "Annulla"}
+                                </button>
+                                {!readOnly && (
+                                    <button 
+                                        type="submit" 
+                                        disabled={loading} 
+                                        className="px-6 py-2 bg-accademia-red hover:bg-red-700 text-white rounded-lg font-bold shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2 w-32"
+                                    >
+                                        {loading ? <Loader2 size={18} className="animate-spin" /> : <><Check size={18}/> Salva</>}
+                                    </button>
+                                )}
+                            </div>
                         </div>
                     </form>
                 )}

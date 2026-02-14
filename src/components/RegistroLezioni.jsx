@@ -117,11 +117,17 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
       setAlunni(alunniList);
       
       if (filters.anno) {
-          const { data: t } = await supabase
+          let queryTariffe = supabase
             .from('tariffe')
-            .select('id, tipo_lezione, costo')
+            .select('id, tipo_lezione, costo, school_id')
             .eq('anno_accademico', filters.anno)
             .order('tipo_lezione');
+
+          if (user.school_id) {
+              queryTariffe = queryTariffe.eq('school_id', user.school_id);
+          }
+          
+          const { data: t } = await queryTariffe;
           setTariffeAnno(t || []);
       }
     };
@@ -608,16 +614,25 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
         return;
       }
       setLoadingTariffe(true);
-      
-      const { data: competenze, error } = await supabase
+
+      const selectedDocente = docenti.find(d => d.id === formData.docente_id);
+      const schoolId = selectedDocente?.school_id || user.school_id;
+
+      let query = supabase
         .from('docenti_tipi_lezioni')
-        .select(`tipi_lezioni ( tipo, modalita )`)
+        .select(`tipi_lezioni!inner(id, tipo, modalita, school_id)`)
         .eq('docente_id', formData.docente_id);
+
+      if (schoolId) {
+        query = query.eq('tipi_lezioni.school_id', schoolId);
+      }
+      
+      const { data: competenze, error } = await query;
 
       if (error) {
         setFilteredTariffe(tariffe); 
       } else {
-        const allowedTypes = competenze?.map(c => c.tipi_lezioni?.tipo) || [];
+        const allowedTypes = [...new Set(competenze?.map(c => c.tipi_lezioni?.tipo) || [])];
         const modesMap = {};
         competenze?.forEach(c => {
             if(c.tipi_lezioni) {
@@ -627,7 +642,10 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
         setLessonModes(modesMap);
 
         const filtered = tariffe.filter(t => allowedTypes.includes(t.tipo_lezione));
-        setFilteredTariffe(filtered);
+        
+        const uniqueFiltered = Array.from(new Map(filtered.map(item => [item.tipo_lezione, item])).values());
+
+        setFilteredTariffe(uniqueFiltered);
       }
       setLoadingTariffe(false);
     };
@@ -640,7 +658,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
         }
         setFilteredTariffe(tariffe);
     }
-  }, [formData.docente_id, tariffe, formData.id]);
+  }, [formData.docente_id, tariffe, formData.id, user.school_id, docenti]);
 
   const handleTipoChange = (e) => {
       const selectedId = e.target.value;

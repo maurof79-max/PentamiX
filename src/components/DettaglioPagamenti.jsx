@@ -1,9 +1,10 @@
 import { useEffect, useState, Fragment } from 'react';
 import { createPortal } from 'react-dom';
-import { supabase } from '../supabaseClient';
-import { Users, X, Euro, Filter, ChevronRight, ChevronDown, ArrowRight } from 'lucide-react';
-import ModalPagamento from './modals/ModalPagamento'; 
-import { MESI_COMPLETE as MESI, ANNI_ACCADEMICI_LIST as ANNI_ACCADEMICI, getCurrentAcademicYear } from '../utils/constants';
+import { supabase } from '../supabaseClient.js';
+import { Users, X, Euro, Filter, ChevronRight, ChevronDown, ArrowRight, Tags, Search } from 'lucide-react';
+import ModalPagamento from './modals/ModalPagamento.jsx'; 
+import { MESI_COMPLETE as MESI, ANNI_ACCADEMICI_LIST as ANNI_ACCADEMICI, getCurrentAcademicYear } from '../utils/constants.js';
+import { calcolaScontiPacchetti } from '../utils/financeManager.js';
 
 export default function DettaglioPagamenti({ user }) {
   const [docenti, setDocenti] = useState([]);
@@ -21,6 +22,11 @@ export default function DettaglioPagamenti({ user }) {
   
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [detailData, setDetailData] = useState(null); 
+
+  const [searchTerm, setSearchTerm] = useState('');
+
+  // Cache per regole pacchetti
+  const [pacchettiRules, setPacchettiRules] = useState([]);
 
   const COLONNE_RENDER = [
       { val: 0, label: 'ISCRIZIONE' },
@@ -67,8 +73,10 @@ export default function DettaglioPagamenti({ user }) {
     setLoading(true);
     try {
       const [startYear, endYear] = selectedAnno.split('/').map(Number);
-      const startDate = `${startYear}-09-01`;
-      const endDate = `${endYear}-08-31`;
+      
+      // Buffer di 7 giorni per catturare lezioni di settimane a cavallo dell'anno accademico
+      const startDateBuffer = `${startYear}-08-24`; 
+      const endDateBuffer = `${endYear}-09-07`;
 
       const { data: docenteInfo } = await supabase.from('docenti').select('school_id').eq('id', selectedDocenteId).single();
       const schoolIdTarget = docenteInfo?.school_id || user?.school_id;
@@ -79,7 +87,7 @@ export default function DettaglioPagamenti({ user }) {
       const currentQuota = annoData?.quota_iscrizione || 0;
       setQuotaIscrizione(currentQuota);
 
-      // RECUPERO TARIFFE FILTRATE PER SCUOLA
+      // A. RECUPERO TARIFFE 
       const { data: tariffeData } = await supabase
         .from('tariffe')
         .select('tipo_lezione, costo')
@@ -91,6 +99,14 @@ export default function DettaglioPagamenti({ user }) {
         costiMap[t.tipo_lezione] = t.costo;
       });
 
+      // B. RECUPERO PACCHETTI (SCONTI)
+      const { data: pacchettiData } = await supabase
+        .from('tariffe_pacchetti')
+        .select('*')
+        .eq('anno_accademico', selectedAnno)
+        .eq('school_id', schoolIdTarget);
+      setPacchettiRules(pacchettiData || []);
+
       const alunniMap = {};
       const createEmptyMonths = () => {
           const m = {};
@@ -98,13 +114,16 @@ export default function DettaglioPagamenti({ user }) {
           return m;
       };
 
+      // C. RECUPERO STUDENTI DEL DOCENTE SELEZIONATO
       const { data: assocData } = await supabase
         .from('associazioni')
         .select('alunno_id, alunni(id, nome, cognome)')
         .eq('docente_id', selectedDocenteId);
 
+      const myAlunniIds = [];
       assocData?.forEach(row => {
         if (row.alunni) {
+          myAlunniIds.push(row.alunno_id);
           alunniMap[row.alunno_id] = {
             id: row.alunno_id,
             nome_completo: `${row.alunni.cognome} ${row.alunni.nome}`,
@@ -115,56 +134,85 @@ export default function DettaglioPagamenti({ user }) {
         }
       });
 
-      const { data: lezioniRaw, error: lezError } = await supabase
-        .from('registro')
-        .select(`
-            alunno_id, 
-            data_lezione, 
-            importo_saldato, 
-            tipi_lezioni!inner ( tipo ), 
-            alunni ( id, nome, cognome )
-        `)
-        .eq('docente_id', selectedDocenteId)
-        .gte('data_lezione', startDate)
-        .lte('data_lezione', endDate);
+      // D. RECUPERO LEZIONI (DI TUTTI I DOCENTI PER GLI STUDENTI DEL DOCENTE SELEZIONATO)
+      // Necessario per calcolare sconti combo trasversali (es. Strumento con me + Teoria con altro)
+      if (myAlunniIds.length > 0) {
+          const { data: lezioniRaw, error: lezError } = await supabase
+            .from('registro')
+            .select(`
+                id,
+                alunno_id, 
+                docente_id,
+                data_lezione, 
+                importo_saldato, 
+                tipi_lezioni!inner ( tipo ), 
+                alunni ( id, nome, cognome ),
+                school_id
+            `)
+            .in('alunno_id', myAlunniIds) // Filtra per gli alunni del docente selezionato
+            .gte('data_lezione', startDateBuffer)
+            .lte('data_lezione', endDateBuffer);
 
-      if (lezError) throw lezError;
+          if (lezError) throw lezError;
 
-      if (lezioniRaw) {
-        lezioniRaw.forEach(lez => {
-          if (!alunniMap[lez.alunno_id] && lez.alunni) {
-             alunniMap[lez.alunno_id] = {
-                id: lez.alunno_id,
-                nome_completo: `${lez.alunni.cognome} ${lez.alunni.nome}`,
-                mesi: createEmptyMonths(),
-                tipologie: {},
-                totale: { dovuto: 0, pagato: 0 }
-             };
-          }
+          // E. ELABORAZIONE SCONTI (Core Logic)
+          // Questa funzione ritorna una lista mista: lezioni originali + righe di sconto virtuali
+          const processedEvents = calcolaScontiPacchetti(lezioniRaw || [], pacchettiData || []);
 
-          if (alunniMap[lez.alunno_id]) {
-            const mese = new Date(lez.data_lezione).getMonth() + 1;
-            const tipoLezione = lez.tipi_lezioni?.tipo || 'Altro';
-            const costo = costiMap[tipoLezione] || 0;
-            const saldato = lez.importo_saldato || 0;
+          // F. POPOLAMENTO MATRICE
+          processedEvents.forEach(evt => {
+            // Filtro visualizzazione: Consideriamo solo eventi pertinenti al docente selezionato
+            // 1. Lezioni reali fatte dal docente selezionato
+            // 2. Sconti virtuali attribuiti al docente selezionato
+            if (evt.docente_id !== selectedDocenteId) return;
 
-            if (alunniMap[lez.alunno_id].mesi[mese]) {
-              alunniMap[lez.alunno_id].mesi[mese].dovuto += costo;
-              alunniMap[lez.alunno_id].mesi[mese].pagato += saldato;
+            // Assicuriamoci che l'alunno sia nella mappa (dovrebbe esserci da associazioni, ma safety check)
+            if (!alunniMap[evt.alunno_id] && evt.alunni) {
+                // Caso raro: lezione fatta ma associazione non trovata o rimossa
+                alunniMap[evt.alunno_id] = {
+                    id: evt.alunno_id,
+                    nome_completo: `${evt.alunni.cognome} ${evt.alunni.nome}`,
+                    mesi: createEmptyMonths(),
+                    tipologie: {},
+                    totale: { dovuto: 0, pagato: 0 }
+                };
             }
 
-            if (!alunniMap[lez.alunno_id].tipologie[tipoLezione]) {
-                alunniMap[lez.alunno_id].tipologie[tipoLezione] = { mesi: createEmptyMonths(), totale: {dovuto:0, pagato:0} };
+            if (alunniMap[evt.alunno_id]) {
+                const mese = new Date(evt.data_lezione).getMonth() + 1;
+                
+                // Determina costo: se virtuale usa costo_calcolato (negativo), altrimenti da tariffa
+                const tipoLezione = evt.tipi_lezioni?.tipo || 'Altro';
+                let costo = 0;
+                
+                if (evt.is_virtual) {
+                    costo = evt.costo_calcolato; // Già negativo
+                } else {
+                    costo = costiMap[tipoLezione] || 0;
+                }
+                
+                const saldato = evt.importo_saldato || 0;
+
+                // Aggiorna totale mese (solo se rientra nei mesi visualizzati dell'anno accademico)
+                if (alunniMap[evt.alunno_id].mesi[mese]) {
+                    alunniMap[evt.alunno_id].mesi[mese].dovuto += costo;
+                    alunniMap[evt.alunno_id].mesi[mese].pagato += saldato;
+                }
+
+                // Aggiorna totale tipologia
+                if (!alunniMap[evt.alunno_id].tipologie[tipoLezione]) {
+                    alunniMap[evt.alunno_id].tipologie[tipoLezione] = { mesi: createEmptyMonths(), totale: {dovuto:0, pagato:0} };
+                }
+                const tipologiaMese = alunniMap[evt.alunno_id].tipologie[tipoLezione].mesi[mese];
+                if (tipologiaMese) {
+                    tipologiaMese.dovuto += costo;
+                    tipologiaMese.pagato += saldato;
+                }
             }
-            const tipologiaMese = alunniMap[lez.alunno_id].tipologie[tipoLezione].mesi[mese];
-            if (tipologiaMese) {
-                tipologiaMese.dovuto += costo;
-                tipologiaMese.pagato += saldato;
-            }
-          }
-        });
+          });
       }
 
+      // G. AGGIUNTA PAGAMENTI ISCRIZIONE
       const alunniIds = Object.keys(alunniMap);
       if (alunniIds.length > 0) {
           const { data: pagamentiIscrizione } = await supabase
@@ -187,6 +235,7 @@ export default function DettaglioPagamenti({ user }) {
           }
       }
 
+      // H. CALCOLO TOTALI FINALI
       Object.values(alunniMap).forEach(alu => {
          if (alu.mesi[0]) alu.mesi[0].dovuto = currentQuota; 
          if (alu.tipologie['Iscrizione']) {
@@ -232,7 +281,7 @@ export default function DettaglioPagamenti({ user }) {
       setExpandedRows(prev => ({ ...prev, [alunnoId]: !prev[alunnoId] }));
   };
 
-  // --- LOGICA DETTAGLIO CELLA (COMPLETAMENTE RIVISTA) ---
+  // --- LOGICA DETTAGLIO CELLA ---
   const handleCellClick = async (alunnoId, mese, tipo) => {
     setDetailData(null); 
     setShowDetailModal(true);
@@ -240,12 +289,22 @@ export default function DettaglioPagamenti({ user }) {
     try {
       let items = [];
       const [startYear, endYear] = selectedAnno.split('/').map(Number);
+      
+      // Calcolo date buffer per la settimana (Month +/- 7 days)
       const yearTarget = mese >= 9 ? startYear : endYear;
       
-      // FIX DATE: Calcolo dinamico dell'ultimo giorno del mese per evitare errori Supabase (es. 31/02)
-      const startDate = `${yearTarget}-${String(mese).padStart(2, '0')}-01`;
-      const lastDay = new Date(yearTarget, mese, 0).getDate(); 
-      const endDate = `${yearTarget}-${String(mese).padStart(2, '0')}-${lastDay}`;
+      // Calcolo inizio e fine mese esatti
+      const firstDayOfMonth = new Date(yearTarget, mese - 1, 1);
+      const lastDayOfMonth = new Date(yearTarget, mese, 0);
+
+      // Buffer esteso per catturare lezioni settimanali
+      const bufferStart = new Date(firstDayOfMonth);
+      bufferStart.setDate(bufferStart.getDate() - 10);
+      const startDateStr = bufferStart.toISOString().split('T')[0];
+
+      const bufferEnd = new Date(lastDayOfMonth);
+      bufferEnd.setDate(bufferEnd.getDate() + 10);
+      const endDateStr = bufferEnd.toISOString().split('T')[0];
       
       const meseLabel = COLONNE_RENDER.find(m => m.val === mese)?.label || 'Mese';
       const title = tipo === 'dovuto' ? `Dettaglio Lezioni - ${meseLabel}` : `Dettaglio Pagamenti - ${meseLabel}`;
@@ -254,37 +313,62 @@ export default function DettaglioPagamenti({ user }) {
         if (mese === 0) {
           items = [{ data: '-', desc: 'Quota Iscrizione', importo: quotaIscrizione }];
         } else {
-          // Recupero tariffe per il costo basato sul listino
-          const { data: docenteInfo } = await supabase.from('docenti').select('school_id').eq('id', selectedDocenteId).maybeSingle();
-          const { data: tData } = await supabase.from('tariffe').select('tipo_lezione, costo').eq('anno_accademico', selectedAnno).eq('school_id', docenteInfo?.school_id || user?.school_id);
-          const map = {}; tData?.forEach(t => map[t.tipo_lezione] = t.costo);
+            // 1. Recupera Info Scuola/Costi
+            const { data: docenteInfo } = await supabase.from('docenti').select('school_id').eq('id', selectedDocenteId).maybeSingle();
+            const { data: tData } = await supabase.from('tariffe').select('tipo_lezione, costo').eq('anno_accademico', selectedAnno).eq('school_id', docenteInfo?.school_id || user?.school_id);
+            const mapCosti = {}; tData?.forEach(t => mapCosti[t.tipo_lezione] = t.costo);
 
-          const { data: lez } = await supabase.from('registro')
-            .select(`data_lezione, tipi_lezioni(tipo)`)
-            .eq('docente_id', selectedDocenteId)
-            .eq('alunno_id', alunnoId)
-            .gte('data_lezione', startDate)
-            .lte('data_lezione', endDate)
-            .order('data_lezione');
+            // 2. Recupera TUTTE le lezioni dell'alunno nel periodo buffer (per calcolo sconti)
+            const { data: lezRaw } = await supabase.from('registro')
+                .select(`id, alunno_id, docente_id, data_lezione, tipi_lezioni(tipo), school_id`)
+                .eq('alunno_id', alunnoId)
+                .gte('data_lezione', startDateStr)
+                .lte('data_lezione', endDateStr)
+                .order('data_lezione');
 
-          items = (lez || []).map(l => ({ 
-            data: new Date(l.data_lezione).toLocaleDateString('it-IT'), 
-            desc: l.tipi_lezioni?.tipo || 'Lezione', 
-            importo: map[l.tipi_lezioni?.tipo] || 0 
-          }));
+            // 3. Applica logica sconti
+            const processed = calcolaScontiPacchetti(lezRaw || [], pacchettiRules);
+
+            // 4. Filtra per Mese esatto e Docente selezionato
+            items = processed
+                .filter(item => {
+                    const itemDate = new Date(item.data_lezione);
+                    const itemMonth = itemDate.getMonth() + 1;
+                    return itemMonth === mese && item.docente_id === selectedDocenteId;
+                })
+                .map(l => {
+                    if (l.is_virtual) {
+                        return {
+                            data: new Date(l.data_lezione).toLocaleDateString('it-IT'),
+                            desc: l.descrizione_sconto,
+                            note: l.dettaglio_settimana,
+                            importo: l.costo_calcolato, // Negativo
+                            is_discount: true
+                        };
+                    } else {
+                        return {
+                            data: new Date(l.data_lezione).toLocaleDateString('it-IT'),
+                            desc: l.tipi_lezioni?.tipo || 'Lezione',
+                            importo: mapCosti[l.tipi_lezioni?.tipo] || 0
+                        };
+                    }
+                });
         }
       } else {
-        // CASO PAGATO
+        // CASO PAGATO (Rimasto invariato)
         if (mese === 0) {
           const { data: pays } = await supabase.from('pagamenti').select('data_pagamento, importo, metodo_pagamento, note').eq('alunno_id', alunnoId).eq('anno_accademico', selectedAnno).eq('tipologia', 'Iscrizione');
           items = (pays || []).map(p => ({ data: new Date(p.data_pagamento).toLocaleDateString('it-IT'), desc: `Iscrizione (${p.metodo_pagamento})`, note: p.note, importo: p.importo }));
         } else {
-          // 1. Troviamo le lezioni del mese
-          const { data: lezIds } = await supabase.from('registro').select('id').eq('docente_id', selectedDocenteId).eq('alunno_id', alunnoId).gte('data_lezione', startDate).lte('data_lezione', endDate);
+          // Ricerca semplice per pagato (non influenzata dai pacchetti)
+          // Nota: Qui usiamo il mese esatto
+          const exactStart = firstDayOfMonth.toISOString().split('T')[0];
+          const exactEnd = lastDayOfMonth.toISOString().split('T')[0];
+
+          const { data: lezIds } = await supabase.from('registro').select('id').eq('docente_id', selectedDocenteId).eq('alunno_id', alunnoId).gte('data_lezione', exactStart).lte('data_lezione', exactEnd);
           const ids = lezIds?.map(l => l.id) || [];
           
           if (ids.length > 0) {
-            // 2. Troviamo i pagamenti collegati a quelle lezioni tramite dettagli_pagamento
             const { data: det, error: errDet } = await supabase
                 .from('dettagli_pagamento')
                 .select(`importo_coperto, pagamenti(data_pagamento, metodo_pagamento, tipologia, note)`)
@@ -339,6 +423,10 @@ export default function DettaglioPagamenti({ user }) {
       );
   };
 
+  const filteredMatrix = matrix.filter(row => 
+    row.nome_completo.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
   return (
     <div className="flex flex-col h-full bg-accademia-card border border-gray-700 rounded-xl overflow-hidden shadow-xl">
       <div className="px-4 py-3 border-b border-gray-700 bg-gray-900/30 flex flex-col sm:flex-row items-center justify-between gap-4 shrink-0">
@@ -347,6 +435,21 @@ export default function DettaglioPagamenti({ user }) {
             <h2 className="text-lg font-light text-white">Riepilogo Pagamenti</h2>
         </div>
         <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+            <div className="flex items-center gap-2 bg-gray-800 rounded-lg px-3 py-1 border border-gray-600">
+                <Search size={14} className="text-gray-400" />
+                <input
+                    type="text"
+                    placeholder="Filtra alunno..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="bg-transparent text-white text-sm focus:outline-none placeholder-gray-500"
+                />
+                {searchTerm && (
+                    <button onClick={() => setSearchTerm('')} className="text-gray-500 hover:text-white">
+                        <X size={14} />
+                    </button>
+                )}
+            </div>
             <div className="flex items-center gap-2 bg-gray-800 rounded-lg px-3 py-1 border border-gray-600">
                 <Filter size={14} className="text-gray-400"/>
                 <select 
@@ -391,7 +494,7 @@ export default function DettaglioPagamenti({ user }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-700 text-sm">
-              {matrix.map((row) => (
+              {filteredMatrix.map((row) => (
                   <Fragment key={`group-${row.id}`}>
                     <tr className="hover:bg-gray-800/30 transition-colors group border-b border-gray-700 relative z-20">
                       <td className="p-0 border-r border-gray-700 sticky left-0 bg-accademia-card group-hover:bg-gray-800 z-10 shadow-r-lg">
@@ -469,13 +572,16 @@ function ModalDettaglioCella({ data, onClose }) {
                             <thead className="bg-gray-800 text-gray-400 text-[10px] uppercase"><tr><th className="px-4 py-2">Data</th><th className="px-4 py-2">Descrizione</th><th className="px-4 py-2 text-right">€</th></tr></thead>
                             <tbody className="divide-y divide-gray-800">
                                 {data.items.map((item, idx) => (
-                                    <tr key={idx} className="hover:bg-gray-800/30 transition-colors">
+                                    <tr key={idx} className={`hover:bg-gray-800/30 transition-colors ${item.is_discount ? 'bg-green-900/10' : ''}`}>
                                         <td className="px-4 py-2 text-gray-400 text-xs font-mono">{item.data}</td>
                                         <td className="px-4 py-2 text-white font-medium text-xs">
+                                            {item.is_discount && <Tags size={10} className="inline mr-1 text-green-500"/>}
                                             {item.desc}
                                             {item.note && <div className="text-[10px] text-gray-500 italic truncate max-w-[120px]">{item.note}</div>}
                                         </td>
-                                        <td className={`px-4 py-2 text-right font-mono font-bold ${isPagamento ? 'text-green-400' : 'text-red-400'}`}>€ {item.importo}</td>
+                                        <td className={`px-4 py-2 text-right font-mono font-bold ${isPagamento ? 'text-green-400' : item.is_discount ? 'text-green-400' : 'text-red-400'}`}>
+                                            {item.is_discount ? '' : '€ '}{item.importo}
+                                        </td>
                                     </tr>
                                 ))}
                             </tbody>

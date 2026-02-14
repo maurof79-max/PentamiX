@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { supabase } from '../supabaseClient';
 import { 
   Edit2, Trash2, Plus, X, Settings, 
-  Calendar, Archive, Download, Lock, CheckCircle2, ShieldAlert, Eye, Building 
+  Calendar, Archive, Download, Lock, CheckCircle2, ShieldAlert, Eye, Building, Tags
 } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
 
@@ -14,14 +14,20 @@ export default function GestioneTariffe({ userRole, config }) {
 
   const [years, setYears] = useState([]);
   const [selectedYear, setSelectedYear] = useState(null); 
+  
   const [tariffe, setTariffe] = useState([]);
+  const [pacchetti, setPacchetti] = useState([]); // NUOVO STATO PACCHETTI
+
   const [loading, setLoading] = useState(false);
   
   // Modali
   const [showYearModal, setShowYearModal] = useState(false);
   const [showTariffaModal, setShowTariffaModal] = useState(false);
+  const [showPacchettoModal, setShowPacchettoModal] = useState(false); // NUOVO MODALE
   const [showQuotaModal, setShowQuotaModal] = useState(false);
+  
   const [editingItem, setEditingItem] = useState(null);
+  const [editingPacchetto, setEditingPacchetto] = useState(null); // NUOVO EDITING
 
   // Dialoghi
   const [dialogConfig, setDialogConfig] = useState({
@@ -37,7 +43,6 @@ export default function GestioneTariffe({ userRole, config }) {
         const { data: profile } = await supabase.from('utenti').select('*').eq('id', session.user.id).single();
 
         // 2. Recupera Scuole (Tutte per Admin, Solo propria per altri)
-        // MODIFICA: Aggiunto recupero campo 'abilita_gestore_tariffe'
         let scuoleList = [];
         if (profile.ruolo === 'Admin') {
             const { data } = await supabase.from('scuole').select('id, nome, abilita_gestore_tariffe').order('nome');
@@ -60,10 +65,15 @@ export default function GestioneTariffe({ userRole, config }) {
     else setYears([]);
   }, [selectedSchool]);
 
-  // Fetch Tariffe al cambio Anno/Scuola
+  // Fetch Tariffe e Pacchetti al cambio Anno/Scuola
   useEffect(() => {
-    if (selectedYear && selectedSchool) fetchTariffe(selectedYear.anno);
-    else setTariffe([]);
+    if (selectedYear && selectedSchool) {
+        fetchTariffe(selectedYear.anno);
+        fetchPacchetti(selectedYear.anno); // NUOVA CHIAMATA
+    } else {
+        setTariffe([]);
+        setPacchetti([]);
+    }
   }, [selectedYear, selectedSchool]);
 
   // --- CHIAMATE DB ---
@@ -77,7 +87,6 @@ export default function GestioneTariffe({ userRole, config }) {
     
     if (data && data.length > 0) {
       setYears(data);
-      // Mantieni selezione o prendi il corrente/primo
       if (!selectedYear || !data.find(y => y.anno === selectedYear.anno)) {
           const current = data.find(y => y.is_current) || data[0];
           setSelectedYear(current);
@@ -102,13 +111,24 @@ export default function GestioneTariffe({ userRole, config }) {
     setTariffe(data || []);
   };
 
+  // NUOVA FUNZIONE FETCH PACCHETTI
+  const fetchPacchetti = async (anno) => {
+    const { data } = await supabase
+      .from('tariffe_pacchetti')
+      .select('*')
+      .eq('school_id', selectedSchool)
+      .eq('anno_accademico', anno)
+      .order('id');
+    setPacchetti(data || []);
+  };
+
   // --- HANDLERS ---
   const handleCreateYear = async (newAnno) => {
     try {
       if(!selectedSchool) throw new Error("Nessuna scuola selezionata");
       setLoading(true);
 
-      // 1. Crea Anno per la scuola corrente
+      // 1. Crea Anno
       const { error } = await supabase.from('anni_accademici').insert([{
         anno: newAnno,
         school_id: selectedSchool,
@@ -118,7 +138,7 @@ export default function GestioneTariffe({ userRole, config }) {
       }]);
       if (error) throw error;
 
-      // 2. Clona Tariffe anno precedente (se esistono)
+      // 2. Clona Tariffe anno precedente
       if (tariffe.length > 0) {
         const newTariffe = tariffe.map(t => ({
           anno_accademico: newAnno,
@@ -127,6 +147,19 @@ export default function GestioneTariffe({ userRole, config }) {
           costo: t.costo
         }));
         await supabase.from('tariffe').insert(newTariffe);
+      }
+      
+      // 3. Clona Pacchetti anno precedente (Opzionale, ma utile)
+      if (pacchetti.length > 0) {
+        const newPacchetti = pacchetti.map(p => ({
+            anno_accademico: newAnno,
+            school_id: selectedSchool,
+            tipo_lezione_a: p.tipo_lezione_a,
+            tipo_lezione_b: p.tipo_lezione_b,
+            sconto: p.sconto,
+            descrizione: p.descrizione
+        }));
+        await supabase.from('tariffe_pacchetti').insert(newPacchetti);
       }
 
       showMessage("Successo", `Anno ${newAnno} creato per la scuola selezionata.`, "success");
@@ -146,13 +179,11 @@ export default function GestioneTariffe({ userRole, config }) {
         async () => {
             try {
                 setLoading(true);
-                // Reset flag solo per questa scuola
                 await supabase.from('anni_accademici')
                     .update({ is_current: false })
                     .eq('school_id', selectedSchool)
                     .neq('anno', 'placeholder');
                 
-                // Set flag nuovo anno
                 const { error } = await supabase.from('anni_accademici')
                     .update({ is_current: true })
                     .eq('school_id', selectedSchool)
@@ -212,6 +243,16 @@ export default function GestioneTariffe({ userRole, config }) {
     }, "danger");
   };
 
+  // NUOVO HANDLER DELETE PACCHETTO
+  const handleDeletePacchetto = (id) => {
+    if (selectedYear.stato === 'Concluso') return;
+    askConfirm("Elimina Pacchetto", "Confermi l'eliminazione della regola di sconto?", async () => {
+        const { error } = await supabase.from('tariffe_pacchetti').delete().eq('id', id);
+        if (error) showMessage("Errore", error.message, "danger");
+        else fetchPacchetti(selectedYear.anno);
+    }, "danger");
+  };
+
   const handleExportData = async () => {
     try {
       setLoading(true);
@@ -245,7 +286,6 @@ export default function GestioneTariffe({ userRole, config }) {
     } catch (err) { showMessage("Errore Export", err.message, "danger"); } finally { setLoading(false); }
   };
 
-  // Helper UI
   const showMessage = (title, message, type = 'info') => {
     setDialogConfig({ isOpen: true, title, message, type, showCancel: false, onConfirm: () => setDialogConfig(p => ({...p, isOpen:false})), onCancel: () => setDialogConfig(p => ({...p, isOpen:false})) });
   };
@@ -253,23 +293,16 @@ export default function GestioneTariffe({ userRole, config }) {
     setDialogConfig({ isOpen: true, title, message, type, showCancel: true, onConfirm: () => { onYes(); setDialogConfig(p => ({...p, isOpen:false})); }, onCancel: () => setDialogConfig(p => ({...p, isOpen:false})) });
   };
 
-  // --- PERMESSI (MODIFICATO) ---
   const canEdit = () => {
-      // 1. Admin ha sempre accesso
       if (userRole === 'Admin') return true;
       if (!selectedSchool) return false;
-
-      // 2. Controllo flag specifico della scuola per il ruolo Gestore
       const currentSchoolObj = scuole.find(s => s.id === selectedSchool);
       if (userRole === 'Gestore' && currentSchoolObj?.abilita_gestore_tariffe) {
           return true;
       }
-
-      // 3. Fallback alla configurazione globale (se necessario)
       if (config && config['permessi_tariffe'] && Array.isArray(config['permessi_tariffe'])) {
           return config['permessi_tariffe'].includes(userRole);
       }
-      
       return false;
   };
 
@@ -360,7 +393,7 @@ export default function GestioneTariffe({ userRole, config }) {
         </div>
       </div>
 
-      {/* BODY (Il resto rimane invariato ma userà isEditable aggiornato) */}
+      {/* BODY */}
       <div className="flex-1 overflow-auto p-6 custom-scrollbar space-y-8">
          {!selectedYear ? (
              <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-4">
@@ -436,6 +469,58 @@ export default function GestioneTariffe({ userRole, config }) {
                     </table>
                  </section>
 
+                 {/* NUOVA SEZIONE: PACCHETTI E SCONTI */}
+                 <section className="border border-gray-800 rounded-xl overflow-hidden bg-gray-900/20">
+                    <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-900/40">
+                        <h3 className="text-white font-bold flex items-center gap-2">
+                            <Tags size={18} className="text-green-400"/> Pacchetti e Sconti (Combo)
+                        </h3>
+                        {isEditable && (
+                            <button 
+                                onClick={() => { setEditingPacchetto(null); setShowPacchettoModal(true); }}
+                                className="flex items-center gap-2 text-green-500 hover:text-green-400 text-sm font-bold uppercase tracking-wider transition-colors"
+                            >
+                                <Plus size={16}/> Aggiungi Pacchetto
+                            </button>
+                        )}
+                    </div>
+
+                    <table className="w-full text-left text-sm">
+                        <thead className="bg-gray-900 text-gray-400 uppercase text-xs">
+                            <tr>
+                                <th className="px-6 py-3 font-semibold">Lezione A</th>
+                                <th className="px-6 py-3 font-semibold text-center">+</th>
+                                <th className="px-6 py-3 font-semibold">Lezione B</th>
+                                <th className="px-6 py-3 font-semibold">Descrizione</th>
+                                <th className="px-6 py-3 font-semibold text-right">Sconto</th>
+                                <th className="px-6 py-3 font-semibold text-right">Azioni</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-800">
+                            {pacchetti.length === 0 ? (
+                                <tr><td colSpan="6" className="p-8 text-center text-gray-500 italic">Nessun pacchetto promozionale attivo.</td></tr>
+                            ) : (
+                                pacchetti.map(p => (
+                                    <tr key={p.id} className="hover:bg-gray-800/30 transition-colors">
+                                        <td className="px-6 py-4 font-medium text-white">{p.tipo_lezione_a}</td>
+                                        <td className="px-6 py-4 text-center text-gray-500">+</td>
+                                        <td className="px-6 py-4 font-medium text-white">{p.tipo_lezione_b}</td>
+                                        <td className="px-6 py-4 text-gray-400 italic text-xs">{p.descrizione}</td>
+                                        <td className="px-6 py-4 text-right font-mono text-green-400 font-bold">- € {p.sconto}</td>
+                                        <td className="px-6 py-4 text-right">
+                                            {isEditable ? (
+                                                <div className="flex justify-end gap-2 opacity-60 hover:opacity-100">
+                                                    <button onClick={() => handleDeletePacchetto(p.id)} className="p-1.5 hover:bg-gray-700 rounded text-red-400"><Trash2 size={16}/></button>
+                                                </div>
+                                            ) : <div className="flex justify-end opacity-40"><Eye size={16} className="text-gray-500"/></div>}
+                                        </td>
+                                    </tr>
+                                ))
+                            )}
+                        </tbody>
+                    </table>
+                 </section>
+
                  <div className="mt-8 pt-6 border-t border-gray-800 flex justify-between">
                      <button onClick={handleExportData} className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg border border-gray-600 transition-all shadow-sm">
                         <Download size={16}/> Esporta Report
@@ -450,7 +535,7 @@ export default function GestioneTariffe({ userRole, config }) {
          )}
       </div>
 
-      {/* MODALI (Invariate) */}
+      {/* MODALI */}
       {showYearModal && (
           <ModalNewYear currentYears={years.map(y => y.anno)} onClose={() => setShowYearModal(false)} onSave={handleCreateYear} />
       )}
@@ -459,12 +544,23 @@ export default function GestioneTariffe({ userRole, config }) {
           <ModalTariffa 
             tariffa={editingItem} 
             anno={selectedYear?.anno} 
-            schoolId={selectedSchool} // Passiamo schoolId
+            schoolId={selectedSchool}
             onClose={() => setShowTariffaModal(false)} 
             onSave={() => { setShowTariffaModal(false); fetchTariffe(selectedYear.anno); }} 
           />
       )}
       
+      {/* NUOVO MODALE PACCHETTO */}
+      {showPacchettoModal && (
+          <ModalPacchetto 
+            pacchetto={editingPacchetto}
+            anno={selectedYear?.anno}
+            schoolId={selectedSchool}
+            onClose={() => setShowPacchettoModal(false)}
+            onSave={() => { setShowPacchettoModal(false); fetchPacchetti(selectedYear.anno); }}
+          />
+      )}
+
       {showQuotaModal && selectedYear && (
           <ModalQuota currentQuota={selectedYear.quota_iscrizione} onClose={() => setShowQuotaModal(false)} onSave={handleUpdateQuota} />
       )}
@@ -473,7 +569,111 @@ export default function GestioneTariffe({ userRole, config }) {
   );
 }
 
-// Sub components (Invariati)
+// --- SUB COMPONENTS ---
+
+// NUOVO COMPONENTE MODALE PACCHETTO
+function ModalPacchetto({ pacchetto, anno, schoolId, onClose, onSave }) {
+    const [formData, setFormData] = useState({ 
+        tipo_lezione_a: pacchetto?.tipo_lezione_a || '', 
+        tipo_lezione_b: pacchetto?.tipo_lezione_b || '', 
+        sconto: pacchetto?.sconto || '',
+        descrizione: pacchetto?.descrizione || ''
+    });
+    const [availableTypes, setAvailableTypes] = useState([]);
+    const [errorMsg, setErrorMsg] = useState('');
+
+    useEffect(() => {
+        const fetchTypes = async () => {
+            if(!schoolId) return;
+            const { data } = await supabase
+                .from('tipi_lezioni')
+                .select('*')
+                .eq('school_id', schoolId)
+                .eq('attivo', true)
+                .order('tipo');
+            setAvailableTypes(data || []);
+        };
+        fetchTypes();
+    }, [schoolId]);
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        setErrorMsg('');
+        if (!formData.tipo_lezione_a || !formData.tipo_lezione_b || !formData.sconto) { 
+            setErrorMsg("Compila tutti i campi obbligatori."); 
+            return; 
+        }
+
+        const payload = { 
+            school_id: schoolId,
+            anno_accademico: anno, 
+            tipo_lezione_a: formData.tipo_lezione_a,
+            tipo_lezione_b: formData.tipo_lezione_b,
+            sconto: parseFloat(formData.sconto.toString().replace(',', '.')),
+            descrizione: formData.descrizione
+        };
+
+        const { error } = await supabase.from('tariffe_pacchetti').insert([payload]);
+
+        if (error) setErrorMsg("Errore DB: " + error.message);
+        else onSave();
+    };
+
+    return createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={onClose}></div>
+            <div className="relative bg-accademia-card border border-gray-700 w-full max-w-md rounded-xl p-6 shadow-2xl animate-in zoom-in-95">
+                <div className="flex justify-between mb-4"><h3 className="text-lg font-bold text-white">Nuovo Pacchetto Sconto</h3><button onClick={onClose}><X className="text-gray-400 hover:text-white"/></button></div>
+                {errorMsg && <div className="mb-4 p-3 bg-red-900/30 border border-red-800 rounded text-red-200 text-sm flex items-center gap-2"><ShieldAlert size={16}/> {errorMsg}</div>}
+                
+                <form onSubmit={handleSubmit} className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Lezione A</label>
+                            <select 
+                                value={formData.tipo_lezione_a} 
+                                onChange={e=>setFormData({...formData, tipo_lezione_a:e.target.value})} 
+                                className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:outline-none focus:border-accademia-red text-xs"
+                                required
+                            >
+                                <option value="">-- Seleziona --</option>
+                                {availableTypes.map(t => <option key={t.id} value={t.tipo}>{t.tipo}</option>)}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Lezione B</label>
+                            <select 
+                                value={formData.tipo_lezione_b} 
+                                onChange={e=>setFormData({...formData, tipo_lezione_b:e.target.value})} 
+                                className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:outline-none focus:border-accademia-red text-xs"
+                                required
+                            >
+                                <option value="">-- Seleziona --</option>
+                                {availableTypes.map(t => <option key={t.id} value={t.tipo}>{t.tipo}</option>)}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Importo Sconto (€)</label>
+                        <input type="number" step="0.5" value={formData.sconto} onChange={e=>setFormData({...formData,sconto:e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white font-bold focus:outline-none focus:border-accademia-red" required placeholder="Es. 5.00"/>
+                        <p className="text-[10px] text-gray-500 mt-1">Valore da sottrarre se entrambe le lezioni sono presenti nella stessa settimana.</p>
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Descrizione (Opzionale)</label>
+                        <input type="text" value={formData.descrizione} onChange={e=>setFormData({...formData,descrizione:e.target.value})} className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white text-sm focus:outline-none focus:border-accademia-red" placeholder="Es. Combo Strumento + Teoria"/>
+                    </div>
+                    
+                    <div className="flex justify-end pt-4">
+                        <button type="submit" className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg font-bold shadow-lg">Salva Pacchetto</button>
+                    </div>
+                </form>
+            </div>
+        </div>, document.body
+    );
+}
+
 function ModalTariffa({ tariffa, anno, schoolId, onClose, onSave }) {
     const [formData, setFormData] = useState({ 
         id: tariffa?.id||null, 

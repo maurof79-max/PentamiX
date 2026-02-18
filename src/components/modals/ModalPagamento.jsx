@@ -1,14 +1,13 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { supabase } from '../../supabaseClient'; 
-import { Plus, Edit2, X, AlertTriangle, ArrowRight } from 'lucide-react';
+import { Plus, Edit2, X, AlertTriangle, ArrowRight, Tags } from 'lucide-react';
 import { MESI_COMPLETE as MESI, ANNI_ACCADEMICI_LIST as ANNI_ACCADEMICI } from '../../utils/constants';
+import { calcolaScontiPacchetti } from '../../utils/financeManager'; 
 
 export default function ModalPagamento({ item, alunni, user, annoCorrente, onClose, onSave }) {
-    // Controllo se è una modifica basandomi sull'esistenza dell'ID
     const isEdit = !!item?.id; 
     
-    // Stati Opzioni
     const [optCausali, setOptCausali] = useState([]);
     const [optTipi, setOptTipi] = useState([]);
 
@@ -16,7 +15,6 @@ export default function ModalPagamento({ item, alunni, user, annoCorrente, onClo
         alunno_id: item?.alunno_id || '',
         docente_id: item?.docente_id || '',
         importo: item?.importo || '',
-        // Default: Data odierna, ma modificabile
         data_pagamento: item?.data_pagamento ? item.data_pagamento.slice(0,10) : new Date().toISOString().slice(0,10),
         tipologia: item?.tipologia || '', 
         metodo_pagamento: item?.metodo_pagamento || '', 
@@ -60,11 +58,7 @@ export default function ModalPagamento({ item, alunni, user, annoCorrente, onClo
             if (!user) return; 
 
             if (isIscrizione && formData.anno_accademico) {
-                let query = supabase
-                    .from('anni_accademici')
-                    .select('quota_iscrizione, school_id')
-                    .eq('anno', formData.anno_accademico);
-
+                let query = supabase.from('anni_accademici').select('quota_iscrizione, school_id').eq('anno', formData.anno_accademico);
                 let targetSchoolId = user.school_id;
                 
                 if (!targetSchoolId && formData.alunno_id && alunni.length > 0) {
@@ -72,18 +66,12 @@ export default function ModalPagamento({ item, alunni, user, annoCorrente, onClo
                      if (selectedAlunno) targetSchoolId = selectedAlunno.school_id;
                 }
 
-                if (targetSchoolId) {
-                    query = query.eq('school_id', targetSchoolId);
-                }
+                if (targetSchoolId) query = query.eq('school_id', targetSchoolId);
 
                 const { data } = await query.limit(1).maybeSingle();
-                
                 if (data && data.quota_iscrizione !== undefined && data.quota_iscrizione !== null) {
                     setStandardIscrizioneFee(data.quota_iscrizione);
-                    // Auto-compila solo se è un NUOVO inserimento e il campo è vuoto
-                    if (!item?.id && !formData.importo) {
-                        setFormData(prev => ({ ...prev, importo: data.quota_iscrizione }));
-                    }
+                    if (!item?.id && !formData.importo) setFormData(prev => ({ ...prev, importo: data.quota_iscrizione }));
                 } else {
                     setStandardIscrizioneFee(null); 
                 }
@@ -94,58 +82,98 @@ export default function ModalPagamento({ item, alunni, user, annoCorrente, onClo
         fetchStandardFee();
     }, [isIscrizione, formData.anno_accademico, formData.alunno_id, isEdit, user, alunni, item?.id]);
 
-    // 3. Fetch Debiti (FIFO) - VERSIONE CORRETTA
+    // 3. Fetch Debiti (con Spalmatura Sconti)
     useEffect(() => {
         const fetchUnpaidLessons = async () => {
-            // Verifichiamo di avere i dati necessari per la query
             if (isLezioni && formData.alunno_id && formData.anno_accademico) {
                 setLoadingDebts(true);
                 try {
-                    // A. Recuperiamo prima le tariffe dell'anno per conoscere i costi
-                    const { data: tariffe } = await supabase
-                        .from('tariffe')
-                        .select('tipo_lezione, costo')
-                        .eq('anno_accademico', formData.anno_accademico);
-                    
-                    const costiMap = {};
-                    tariffe?.forEach(t => {
-                        costiMap[t.tipo_lezione] = t.costo;
-                    });
+                    const { data: tariffe } = await supabase.from('tariffe').select('tipo_lezione, costo').eq('anno_accademico', formData.anno_accademico);
+                    const costiMap = {}; tariffe?.forEach(t => costiMap[t.tipo_lezione] = t.costo);
 
-                    // B. Fetch lezioni dal registro (rimosso 'costo' dalla select interna)
-                    const { data: lezioni, error: lezError } = await supabase
+                    let pacchettiQuery = supabase.from('tariffe_pacchetti').select('*').eq('anno_accademico', formData.anno_accademico);
+                    if (user?.school_id) pacchettiQuery = pacchettiQuery.eq('school_id', user.school_id);
+                    const { data: pacchettiData } = await pacchettiQuery;
+
+                    const [startYear, endYear] = formData.anno_accademico.split('/').map(Number);
+                    const startDateStr = `${startYear}-08-24`; 
+                    const endDateStr = `${endYear}-09-07`;
+
+                    const { data: lezioniRaw, error: lezError } = await supabase
                         .from('registro')
-                        .select(`
-                            id, 
-                            data_lezione, 
-                            importo_saldato, 
-                            tipi_lezioni!inner ( tipo )
-                        `)
+                        .select(`id, alunno_id, docente_id, school_id, data_lezione, importo_saldato, tipi_lezioni (tipo)`)
                         .eq('alunno_id', formData.alunno_id)
+                        .gte('data_lezione', startDateStr)
+                        .lte('data_lezione', endDateStr)
                         .order('data_lezione', { ascending: true });
 
                     if (lezError) throw lezError;
 
-                    if (lezioni) {
+                    if (lezioniRaw) {
+                        const eventiElaboratiRaw = calcolaScontiPacchetti(lezioniRaw, pacchettiData || []);
+                        
+                        // Riordino forzando gli sconti prima delle lezioni in caso di parità di data
+                        const eventiElaborati = eventiElaboratiRaw.sort((a, b) => {
+                            const timeA = new Date(a.data_lezione).getTime();
+                            const timeB = new Date(b.data_lezione).getTime();
+                            if (timeA !== timeB) return timeA - timeB;
+                            if (a.is_virtual && !b.is_virtual) return -1;
+                            if (!a.is_virtual && b.is_virtual) return 1;
+                            return 0;
+                        });
+
+                        // Calcoliamo i residui fisici crudi per capire se un pacchetto è già estinto
+                        const allResidui = {};
+                        eventiElaborati.forEach(e => {
+                            if (!e.is_virtual) {
+                                const costo = costiMap[e.tipi_lezioni?.tipo] || 0;
+                                const saldato = e.importo_saldato || 0;
+                                allResidui[e.id] = costo - saldato;
+                            }
+                        });
+
+                        // Un pacchetto virtuale sopravvive solo se le lezioni a cui è agganciato non sono state già saldate
+                        const isScontoValido = (sconto) => {
+                            let matches = 0;
+                            let hasUnpaid = false;
+                            for (let id in allResidui) {
+                                if (sconto.id.includes(`-${id}-`) || sconto.id.endsWith(`-${id}`)) {
+                                    matches++;
+                                    if (allResidui[id] > 0.01) hasUnpaid = true;
+                                }
+                            }
+                            return matches > 0 ? hasUnpaid : true; 
+                        };
+
                         let runningTotal = 0;
-                        const debts = lezioni
-                            .map(l => {
-                                // Recuperiamo il costo dalla mappa tariffe usando il nome del tipo lezione
-                                const costoEffettivo = costiMap[l.tipi_lezioni?.tipo] || 0;
-                                const saldato = l.importo_saldato || 0;
+                        const debts = eventiElaborati
+                            .map(evento => {
+                                let costoEffettivo = 0;
+                                let saldato = evento.importo_saldato || 0;
+
+                                if (evento.is_virtual) {
+                                    costoEffettivo = evento.costo_calcolato; 
+                                } else {
+                                    costoEffettivo = costiMap[evento.tipi_lezioni?.tipo] || 0;
+                                }
+
                                 const residuo = costoEffettivo - saldato;
-                                return { ...l, costo: costoEffettivo, saldato, residuo };
+                                return { ...evento, costo: costoEffettivo, saldato, residuo };
                             })
-                            // Filtriamo solo le lezioni non completamente saldate
-                            .filter(l => l.residuo > 0.01) 
-                            .map(l => {
-                                runningTotal += l.residuo; 
-                                return { ...l, cumulative: runningTotal };
+                            .filter(e => {
+                                if (e.is_virtual) return isScontoValido(e);
+                                return e.residuo > 0.01;
+                            })
+                            .map(e => {
+                                runningTotal += e.residuo; 
+                                const displayCumulative = runningTotal < 0 ? 0 : runningTotal; 
+                                return { ...e, cumulative: displayCumulative };
                             });
+
                         setUnpaidLessons(debts);
                     }
                 } catch (err) {
-                    console.error("Errore nel recupero lezioni non pagate:", err);
+                    console.error("Errore nel recupero lezioni:", err);
                 } finally {
                     setLoadingDebts(false);
                 }
@@ -154,7 +182,7 @@ export default function ModalPagamento({ item, alunni, user, annoCorrente, onClo
             }
         };
         fetchUnpaidLessons();
-    }, [isLezioni, formData.alunno_id, formData.anno_accademico]);
+    }, [isLezioni, formData.alunno_id, formData.anno_accademico, user]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -167,11 +195,8 @@ export default function ModalPagamento({ item, alunni, user, annoCorrente, onClo
         }
 
         const payload = { ...formData };
-        if (isIscrizione) { 
-            delete payload.docente_id; 
-        }
+        if (isIscrizione) delete payload.docente_id; 
         else if (!payload.docente_id) delete payload.docente_id;
-
         if (payload.importo === '') delete payload.importo;
 
         try {
@@ -186,22 +211,45 @@ export default function ModalPagamento({ item, alunni, user, annoCorrente, onClo
                 paymentId = newPayment.id;
             }
 
-            // Logica FIFO
+            // Logica Multi-Budget: Separa il contante reale (Riepilogo Alunni) dagli sconti (Saldato Lezioni)
             if (!isEdit && isLezioni && paymentId && unpaidLessons.length > 0) {
-                let budget = parseFloat(payload.importo);
+                let cashBudget = parseFloat(payload.importo); 
+                let totalBudget = cashBudget; 
+                
                 for (const lesson of unpaidLessons) {
-                    if (budget <= 0.01) break; 
-                    const amountToPay = Math.min(budget, lesson.residuo);
+                    if (cashBudget <= 0.01 && totalBudget <= 0.01) break; 
                     
-                    await supabase.from('registro').update({ importo_saldato: lesson.saldato + amountToPay }).eq('id', lesson.id);
+                    if (lesson.is_virtual) {
+                        totalBudget += Math.abs(lesson.costo); 
+                        continue;
+                    }
+
+                    let amountNeeded = lesson.residuo; 
+                    let toPay = Math.min(totalBudget, amountNeeded); 
                     
-                    await supabase.from('dettagli_pagamento').insert([{
-                        pagamento_id: paymentId,
-                        registro_id: lesson.id,
-                        importo_coperto: amountToPay
-                    }]);
+                    let discountAvailable = totalBudget - cashBudget;
+                    if (discountAvailable < 0) discountAvailable = 0; 
                     
-                    budget -= amountToPay;
+                    let discountUsed = Math.min(discountAvailable, toPay);
+                    let cashUsed = toPay - discountUsed;
+                    cashUsed = Math.round(cashUsed * 100) / 100; // Sicurezza float
+
+                    if (cashUsed > cashBudget) cashUsed = cashBudget; 
+                    
+                    // Avanzamento lezione a "Saldato" per gli insegnanti (Usa Budget Totale)
+                    await supabase.from('registro').update({ importo_saldato: lesson.saldato + toPay }).eq('id', lesson.id);
+                    
+                    // Solo il contante reale finisce nei dettagli (Per far quadrare Riepilogo Alunni)
+                    if (cashUsed > 0) {
+                        await supabase.from('dettagli_pagamento').insert([{
+                            pagamento_id: paymentId,
+                            registro_id: lesson.id,
+                            importo_coperto: cashUsed
+                        }]);
+                        cashBudget -= cashUsed;
+                    }
+                    
+                    totalBudget -= toPay;
                 }
             }
             onSave();
@@ -345,43 +393,67 @@ export default function ModalPagamento({ item, alunni, user, annoCorrente, onClo
                     {isLezioni && unpaidLessons.length > 0 && (
                         <div className="w-96 bg-gray-900/50 rounded-lg border border-gray-700 flex flex-col overflow-hidden animate-in slide-in-from-right-4 shrink-0">
                             <div className="p-3 bg-gray-800 border-b border-gray-700 text-xs font-bold text-gray-400 uppercase tracking-wider flex justify-between items-center shrink-0">
-                                <span>Lezioni da Saldare</span>
+                                <span>Da Saldare (Incl. Sconti)</span>
                                 <span className="bg-red-900/40 text-red-300 px-2 py-0.5 rounded-full">{unpaidLessons.length}</span>
                             </div>
                             <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-2">
-                                {unpaidLessons.map((lesson) => (
-                                    <div 
-                                        key={lesson.id} 
-                                        onClick={() => setFormData(p => ({ ...p, importo: lesson.cumulative }))}
-                                        className="group relative p-3 rounded bg-gray-800/40 hover:bg-accademia-red/10 border border-gray-700/50 hover:border-accademia-red/50 cursor-pointer transition-all"
-                                        title="Clicca per pagare fino a qui"
-                                    >
-                                        <div className="flex justify-between items-start mb-1">
-                                            <span className="text-white font-mono text-sm">{new Date(lesson.data_lezione).toLocaleDateString('it-IT')}</span>
-                                            <span className="text-xs text-gray-400 truncate max-w-[150px]">{lesson.tipi_lezioni?.tipo}</span>
-                                        </div>
-                                        <div className="flex justify-between items-end">
-                                            <div className="text-xs flex flex-col">
-                                                <span className="text-gray-500">Residuo: <span className="text-red-400 font-bold">€ {lesson.residuo}</span></span>
-                                                {lesson.saldato > 0 && (
-                                                    <span className="text-yellow-500 font-bold text-[10px] mt-0.5 flex items-center gap-1">
-                                                        <AlertTriangle size={10} /> Parziale (Tot: € {lesson.costo})
-                                                    </span>
-                                                )}
+                                {loadingDebts ? <div className="p-4 text-center text-gray-500 text-xs">Caricamento in corso...</div> : 
+                                unpaidLessons.map((lesson, idx) => {
+                                    const isDiscount = lesson.is_virtual;
+                                    
+                                    const handleClick = () => {
+                                        if (!isDiscount) setFormData(p => ({ ...p, importo: lesson.cumulative.toFixed(2) }));
+                                    };
+
+                                    return (
+                                        <div 
+                                            key={lesson.id || idx} 
+                                            onClick={handleClick}
+                                            className={`group relative p-3 rounded border transition-all
+                                                ${isDiscount 
+                                                    ? 'bg-green-900/10 border-green-800/30' 
+                                                    : 'bg-gray-800/40 border-gray-700/50 hover:bg-accademia-red/10 hover:border-accademia-red/50 cursor-pointer'
+                                                }`}
+                                            title={isDiscount ? "Credito generato dal pacchetto" : "Clicca per pagare il dovuto fino a qui"}
+                                        >
+                                            <div className="flex justify-between items-start mb-1">
+                                                <span className={`font-mono text-sm ${isDiscount ? 'text-green-400' : 'text-white'}`}>
+                                                    {new Date(lesson.data_lezione).toLocaleDateString('it-IT')}
+                                                </span>
+                                                <span className={`text-xs truncate max-w-[150px] font-medium flex items-center ${isDiscount ? 'text-green-500' : 'text-gray-400'}`}>
+                                                    {isDiscount && <Tags size={12} className="mr-1 inline-block" />}
+                                                    {isDiscount ? lesson.descrizione_sconto : lesson.tipi_lezioni?.tipo}
+                                                </span>
                                             </div>
-                                            <div className="text-right">
-                                                <div className="text-[10px] text-gray-500 uppercase">Tot. Progressivo</div>
-                                                <div className="text-green-400 font-bold font-mono text-sm group-hover:scale-110 transition-transform flex items-center gap-1 justify-end">
-                                                    € {lesson.cumulative.toFixed(2)}
-                                                    <ArrowRight size={12} className="opacity-0 group-hover:opacity-100"/>
+                                            <div className="flex justify-between items-end">
+                                                <div className="text-xs flex flex-col">
+                                                    {isDiscount ? (
+                                                        <span className="text-green-500 font-bold">€ {lesson.residuo.toFixed(2)}</span>
+                                                    ) : (
+                                                        <>
+                                                            <span className="text-gray-500">Residuo: <span className="text-red-400 font-bold">€ {lesson.residuo.toFixed(2)}</span></span>
+                                                            {lesson.saldato > 0 && (
+                                                                <span className="text-yellow-500 font-bold text-[10px] mt-0.5 flex items-center gap-1">
+                                                                    <AlertTriangle size={10} /> Parziale (Listino: € {lesson.costo})
+                                                                </span>
+                                                            )}
+                                                        </>
+                                                    )}
+                                                </div>
+                                                <div className="text-right">
+                                                    <div className={`text-[10px] uppercase ${isDiscount ? 'text-green-600/70' : 'text-gray-500'}`}>Tot. Progressivo</div>
+                                                    <div className={`font-bold font-mono text-sm group-hover:scale-110 transition-transform flex items-center gap-1 justify-end ${isDiscount ? 'text-green-400/80' : 'text-green-400'}`}>
+                                                        € {lesson.cumulative.toFixed(2)}
+                                                        {!isDiscount && <ArrowRight size={12} className="opacity-0 group-hover:opacity-100"/>}
+                                                    </div>
                                                 </div>
                                             </div>
                                         </div>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                             <div className="p-2 bg-gray-800/80 text-[10px] text-gray-500 text-center italic border-t border-gray-700 shrink-0">
-                                Clicca su una riga per impostare l'importo totale fino a quella data.
+                                Clicca sulle lezioni (scure) per impostare il pagamento. Le righe verdi applicano sconti al totale.
                             </div>
                         </div>
                     )}

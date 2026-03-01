@@ -13,19 +13,14 @@ export default function GestioneTipiLezioni({ userRole }) {
   const [lezioni, setLezioni] = useState([]);
   const [loading, setLoading] = useState(false);
   
-  // STATO PER CHECK TARIFFE
-  // Contiene un Set di stringhe con i nomi delle lezioni che HANNO una tariffa
   const [tariffePresenti, setTariffePresenti] = useState(new Set()); 
   const currentAnno = getCurrentAcademicYear();
 
-  // Modale
   const [showModal, setShowModal] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
 
-  // Dialog
   const [dialogConfig, setDialogConfig] = useState({ isOpen: false, type: 'info', title: '', message: '' });
 
-  // --- INIT ---
   useEffect(() => {
     const init = async () => {
         const { data: { session } } = await supabase.auth.getSession();
@@ -46,7 +41,6 @@ export default function GestioneTipiLezioni({ userRole }) {
     init();
   }, []);
 
-  // Al cambio scuola, ricarica lezioni e controlla le tariffe
   useEffect(() => {
     if (selectedSchool) {
         fetchLezioni();
@@ -61,27 +55,24 @@ export default function GestioneTipiLezioni({ userRole }) {
     setLoading(true);
     const { data } = await supabase
       .from('tipi_lezioni')
-      .select('id, tipo, durata_minuti, attivo, modalita')
+      // AGGIUNTO colore_hex ALLA SELECT
+      .select('id, tipo, durata_minuti, attivo, modalita, colore_hex')
       .eq('school_id', selectedSchool)
       .order('tipo');
     setLezioni(data || []);
     setLoading(false);
   };
 
-  // FUNZIONE CONTROLLO TARIFFE
   const checkTariffe = async () => {
       if (!selectedSchool) return;
 
-      // Scarica le tariffe per l'anno corrente e per la SCUOLA SELEZIONATA
       const { data: tariffe } = await supabase
         .from('tariffe')
         .select('tipo_lezione')
-        .eq('school_id', selectedSchool) // IMPORTANTE: Filtra per scuola
+        .eq('school_id', selectedSchool) 
         .eq('anno_accademico', currentAnno);
       
-      // Creiamo un Set con i tipi di lezione che HANNO una tariffa
       const tipiCoperti = new Set(tariffe?.map(t => t.tipo_lezione));
-      
       setTariffePresenti(tipiCoperti);
   };
 
@@ -109,7 +100,7 @@ export default function GestioneTipiLezioni({ userRole }) {
             if(error) alert("Impossibile eliminare (probabilmente è usata in calendario/tariffe): " + error.message);
             else {
                 fetchLezioni();
-                checkTariffe(); // Aggiorniamo anche il check tariffe
+                checkTariffe(); 
             }
             setDialogConfig({ ...dialogConfig, isOpen: false });
         },
@@ -119,15 +110,12 @@ export default function GestioneTipiLezioni({ userRole }) {
 
   return (
     <div className="h-full flex flex-col bg-accademia-card p-6">
-      
-      {/* HEADER */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
         <div className="flex items-center gap-4">
             <h2 className="text-2xl font-light text-white flex items-center gap-2">
                 <BookOpen className="text-accademia-red"/> Catalogo Didattico
             </h2>
             
-            {/* Selettore Scuola */}
             <div className="bg-gray-800/50 p-2 rounded-lg border border-gray-700 flex items-center gap-2">
                 <Building size={16} className="text-gray-400"/>
                 <select 
@@ -150,7 +138,6 @@ export default function GestioneTipiLezioni({ userRole }) {
         </button>
       </div>
 
-      {/* TABELLA */}
       <div className="flex-1 overflow-auto border border-gray-800 rounded-xl bg-gray-900/20 custom-scrollbar">
         <table className="w-full text-left text-sm">
             <thead className="bg-gray-900 text-gray-400 uppercase text-xs sticky top-0 z-10">
@@ -164,16 +151,21 @@ export default function GestioneTipiLezioni({ userRole }) {
             </thead>
             <tbody className="divide-y divide-gray-800">
                 {lezioni.map(l => {
-                    // Verifica se esiste tariffa per questo tipo di lezione
                     const hasTariffa = tariffePresenti.has(l.tipo);
 
                     return (
                     <tr key={l.id} className="hover:bg-gray-800/30 transition-colors">
                         <td className="px-6 py-4 font-bold text-white relative">
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-3">
+                                {/* PALLINO COLORATO INDICATORE */}
+                                <div 
+                                    className="w-4 h-4 rounded-full shadow-sm border border-gray-700"
+                                    style={{ backgroundColor: l.colore_hex || '#dc2626' }}
+                                    title={l.colore_hex || 'Colore default'}
+                                ></div>
+                                
                                 {l.tipo}
                                 
-                                {/* ALERT VISIVO SE MANCA TARIFFA (Solo se attivo) */}
                                 {l.attivo && !hasTariffa && (
                                     <div className="group relative">
                                         <AlertTriangle size={16} className="text-orange-500 animate-pulse cursor-help"/>
@@ -186,7 +178,6 @@ export default function GestioneTipiLezioni({ userRole }) {
                             </div>
                         </td>
                         
-                        {/* COLONNA MODALITA' */}
                         <td className="px-6 py-4 text-gray-300">
                             {l.modalita === 'Collettiva' ? (
                                 <span className="flex items-center gap-2 text-yellow-400 text-xs bg-yellow-400/10 px-2 py-1 rounded border border-yellow-400/20 w-fit">
@@ -225,13 +216,11 @@ export default function GestioneTipiLezioni({ userRole }) {
         </table>
       </div>
 
-      {/* MODALE */}
       {showModal && (
           <ModalTipoLezione 
             item={editingItem} 
             schoolId={selectedSchool}
             onClose={() => setShowModal(false)}
-            // Al salvataggio aggiorniamo sia la lista lezioni che il controllo tariffe
             onSave={() => { setShowModal(false); fetchLezioni(); checkTariffe(); }}
           />
       )}
@@ -247,7 +236,9 @@ function ModalTipoLezione({ item, schoolId, onClose, onSave }) {
         tipo: item?.tipo || '', 
         durata_minuti: item?.durata_minuti || 60,
         modalita: item?.modalita || 'Individuale', 
-        attivo: item ? item.attivo : true 
+        attivo: item ? item.attivo : true,
+        // AGGIUNTO COLORE AL FORM (di base proponiamo un azzurro/blu)
+        colore_hex: item?.colore_hex || '#3b82f6' 
     });
 
     const handleSubmit = async (e) => {
@@ -258,7 +249,9 @@ function ModalTipoLezione({ item, schoolId, onClose, onSave }) {
             tipo: form.tipo,
             durata_minuti: parseInt(form.durata_minuti),
             modalita: form.modalita,
-            attivo: form.attivo 
+            attivo: form.attivo,
+            // SALVIAMO IL COLORE
+            colore_hex: form.colore_hex 
         };
 
         let error;
@@ -274,6 +267,9 @@ function ModalTipoLezione({ item, schoolId, onClose, onSave }) {
         else onSave();
     };
 
+    // Paletta di colori predefiniti veloci (opzionale, ma fa molta scena)
+    const presetColors = ['#dc2626', '#ea580c', '#d97706', '#16a34a', '#0d9488', '#2563eb', '#4f46e5', '#9333ea', '#db2777', '#475569'];
+
     return createPortal(
         <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
             <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={onClose}></div>
@@ -286,7 +282,6 @@ function ModalTipoLezione({ item, schoolId, onClose, onSave }) {
 
                 <form onSubmit={handleSubmit} className="space-y-4">
                     
-                    {/* CAMPO NOME */}
                     <div>
                         <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Nome (es. Pianoforte)</label>
                         <input 
@@ -298,22 +293,50 @@ function ModalTipoLezione({ item, schoolId, onClose, onSave }) {
                         />
                     </div>
 
-                    {/* CAMPO DURATA */}
-                    <div>
-                        <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Durata Standard (minuti)</label>
-                        <input 
-                            type="number" 
-                            step="5" 
-                            value={form.durata_minuti} 
-                            onChange={e => setForm({...form, durata_minuti: e.target.value})} 
-                            className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" 
-                            required
-                        />
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Durata Standard</label>
+                            <input 
+                                type="number" 
+                                step="5" 
+                                value={form.durata_minuti} 
+                                onChange={e => setForm({...form, durata_minuti: e.target.value})} 
+                                className="w-full bg-accademia-input border border-gray-700 rounded p-2 text-white focus:border-accademia-red focus:outline-none" 
+                                required
+                            />
+                        </div>
+                        
+                        {/* CAMPO COLORE CON PICKER HTML5 E PRESET */}
+                        <div>
+                            <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Colore Griglia</label>
+                            <div className="flex items-center gap-2">
+                                <input 
+                                    type="color" 
+                                    value={form.colore_hex} 
+                                    onChange={e => setForm({...form, colore_hex: e.target.value})} 
+                                    className="w-10 h-10 p-0.5 bg-accademia-input border border-gray-700 rounded cursor-pointer" 
+                                />
+                                <span className="text-xs text-gray-400 font-mono uppercase">{form.colore_hex}</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    {/* PALETTE COLORI VELOCI */}
+                    <div className="flex flex-wrap gap-2 pt-1">
+                        {presetColors.map(color => (
+                            <button
+                                key={color}
+                                type="button"
+                                onClick={() => setForm({...form, colore_hex: color})}
+                                className={`w-6 h-6 rounded-full border-2 transition-all ${form.colore_hex === color ? 'border-white scale-110' : 'border-transparent hover:scale-110'}`}
+                                style={{ backgroundColor: color }}
+                                title={color}
+                            />
+                        ))}
                     </div>
 
-                    {/* SELETTORE MODALITÀ (RADIO BUTTONS) */}
                     <div>
-                        <label className="block text-xs font-bold text-gray-400 mb-2 uppercase">Modalità Lezione</label>
+                        <label className="block text-xs font-bold text-gray-400 mb-2 uppercase mt-2">Modalità Lezione</label>
                         <div className="flex gap-4 p-2 bg-gray-800/50 border border-gray-700 rounded-lg">
                             <label className="flex items-center gap-2 cursor-pointer group">
                                 <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${form.modalita === 'Individuale' ? 'border-accademia-red' : 'border-gray-500'}`}>
@@ -351,7 +374,6 @@ function ModalTipoLezione({ item, schoolId, onClose, onSave }) {
                         </div>
                     </div>
 
-                    {/* CAMPO STATO */}
                     <div>
                         <label className="block text-xs font-bold text-gray-400 mb-1 uppercase">Stato</label>
                         <select 
@@ -364,7 +386,7 @@ function ModalTipoLezione({ item, schoolId, onClose, onSave }) {
                         </select>
                     </div>
 
-                    <div className="flex justify-end pt-4 gap-2">
+                    <div className="flex justify-end pt-4 gap-2 border-t border-gray-800 mt-2">
                          <button type="button" onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white text-sm">Annulla</button>
                         <button type="submit" className="bg-accademia-red hover:bg-red-700 text-white px-6 py-2 rounded-lg font-bold shadow-lg">Salva</button>
                     </div>

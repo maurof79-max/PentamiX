@@ -270,9 +270,10 @@ export default function Dashboard() {
       window.location.href = '/dashboard';
   };
 
-  const handleMenuClick = (viewId) => {
+const handleMenuClick = (viewId) => {
     setActiveView(viewId);
-    if (window.innerWidth < 768 || ['dettaglio_pagamenti', 'finanza', 'compensi-docenti', 'riepilogo_alunni'].includes(viewId)) {
+    // Aggiunto 'registro_lezioni' all'array per forzare la chiusura della sidebar
+    if (window.innerWidth < 768 || ['dettaglio_pagamenti', 'finanza', 'compensi-docenti', 'riepilogo_alunni', 'registro_lezioni'].includes(viewId)) {
       setIsSidebarOpen(false);
     }
   };

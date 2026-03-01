@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom';
 import { supabase } from '../supabaseClient';
 import { 
     Plus, X, Edit2, Trash2, Search, ArrowUpDown, AlertTriangle, 
-    Users, User, Loader2, Printer, CheckSquare, Square, Eye
+    Users, User, Loader2, Printer, CheckSquare, Square, Eye,
+    LayoutGrid, List, Copy
 } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
 
@@ -40,17 +41,20 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
   const [editingLezione, setEditingLezione] = useState(null);
   const [isReadOnly, setIsReadOnly] = useState(false);
   
+  // STATO: Visualizzazione a Griglia e Colonna Attiva (Hover)
+  const [viewMode, setViewMode] = useState('grid');
+  const [hoveredDay, setHoveredDay] = useState(null);
+
   const [confirmDialog, setConfirmDialog] = useState({ 
     isOpen: false, type: 'danger', title: '', message: '', confirmText: 'Conferma', onConfirm: null, showCancel: true
   });
 
-  // --- 1. Carica Anni (con Deduplicazione) ---
+  // --- 1. Carica Anni ---
   useEffect(() => {
     const fetchYears = async () => {
         try {
             const { data } = await supabase.from('anni_accademici').select('anno').order('anno', {ascending:false});
             if(data && data.length > 0) {
-                // FIX DUPLICATI: Usiamo un Map per rimuovere anni duplicati visivamente
                 const uniqueYears = Array.from(new Map(data.map(item => [item.anno, item])).values());
                 setActiveYears(uniqueYears);
             } else {
@@ -75,14 +79,11 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
   // --- 3. Carica Risorse (Docenti/Alunni per i FILTRI) ---
   useEffect(() => {
     const fetchResources = async () => {
-      // Docenti (Solo se non è docente)
       if (user.ruolo !== 'Docente') {
         let queryDoc = supabase.from('docenti').select('id, nome, cognome, strumento, school_id').order('cognome');
-        
         if (user.school_id) {
             queryDoc = queryDoc.eq('school_id', user.school_id);
         }
-
         const { data: d } = await queryDoc;
         const docentiFormatted = d?.map(doc => ({
             ...doc,
@@ -91,7 +92,6 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
         setDocenti(docentiFormatted);
       }
 
-      // Alunni
       let alunniList = [];
       if (user.ruolo === 'Docente') {
           if (user.id_collegato) {
@@ -99,16 +99,13 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
                 .from('associazioni')
                 .select('alunni(id, nome, cognome)')
                 .eq('docente_id', user.id_collegato);
-              
               alunniList = assocData?.map(a => a.alunni).filter(Boolean) || [];
           }
       } else {
           let queryAlunni = supabase.from('alunni').select('id, nome, cognome').eq('stato', 'Attivo');
-          
           if (user.school_id) {
               queryAlunni = queryAlunni.eq('school_id', user.school_id);
           }
-
           const { data: a } = await queryAlunni;
           alunniList = a || [];
       }
@@ -122,11 +119,9 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
             .select('id, tipo_lezione, costo, school_id')
             .eq('anno_accademico', filters.anno)
             .order('tipo_lezione');
-
           if (user.school_id) {
               queryTariffe = queryTariffe.eq('school_id', user.school_id);
           }
-          
           const { data: t } = await queryTariffe;
           setTariffeAnno(t || []);
       }
@@ -149,30 +144,24 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
       let query = supabase
         .from('registro')
         .select(`
-          id, data_lezione, convalidato, anno_accademico, contabilizza_docente, tipo_lezione_id, importo_saldato, note,
+          id, data_lezione, docente_id, alunno_id, convalidato, anno_accademico, contabilizza_docente, tipo_lezione_id, importo_saldato, note,
           docenti!inner ( id, nome, cognome, school_id ),
           alunni ( id, nome, cognome ),
-          tipi_lezioni ( id, tipo, modalita ) 
+          tipi_lezioni ( id, tipo, modalita, colore_hex ) 
         `)
         .gte('data_lezione', startDate)
         .lte('data_lezione', endDate);
 
-      // --- FILTRI RUOLO E SCUOLA ---
       if (user.ruolo === 'Docente') {
           if (!user.id_collegato) {
-              console.warn("Utente Docente senza id_collegato. Impossibile caricare lezioni.");
               setLezioni([]);
               setLoading(false);
               return;
           }
           query = query.eq('docente_id', user.id_collegato);
       } else {
-          if (filters.docente_id) {
-              query = query.eq('docente_id', filters.docente_id);
-          }
-          if (user.school_id) {
-              query = query.eq('docenti.school_id', user.school_id);
-          }
+          if (filters.docente_id) query = query.eq('docente_id', filters.docente_id);
+          if (user.school_id) query = query.eq('docenti.school_id', user.school_id);
       }
 
       if (filters.alunno_id) query = query.eq('alunno_id', filters.alunno_id);
@@ -235,7 +224,6 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
       return true; 
   };
 
-  // --- CRUD & SORTING ---
   const handleSort = (key) => {
     let direction = 'asc';
     if (sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
@@ -265,7 +253,6 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
     });
   }, [lezioni, sortConfig]);
 
-  // --- DELETE LOGIC ---
   const handleDeleteClick = async (row) => {
     const hasPermission = await checkPermission(row.anno_accademico);
     if (!hasPermission) return;
@@ -294,7 +281,6 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
                     .eq('docente_id', row.docenti.id)
                     .eq('data_lezione', row.data_lezione)
                     .eq('tipo_lezione_id', row.tipo_lezione_id);
-
                 if (error) throw error;
             } else {
                 if (row.contabilizza_docente && isCollettiva) {
@@ -387,6 +373,57 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
     }
   };
 
+  const activeLessonTypes = useMemo(() => {
+      const typesMap = new Map();
+      lezioni.forEach(l => {
+          if (l.tipi_lezioni?.tipo) {
+              typesMap.set(l.tipi_lezioni.tipo, l.tipi_lezioni.colore_hex || '#dc2626');
+          }
+      });
+      return Array.from(typesMap, ([tipo, colore]) => ({ tipo, colore })).sort((a,b) => a.tipo.localeCompare(b.tipo));
+  }, [lezioni]);
+
+  const getYearForMonth = (mese, annoAccademico) => {
+      if (!annoAccademico || !mese) return new Date().getFullYear();
+      const [startYear, endYear] = annoAccademico.split('/').map(Number);
+      return (mese >= 9 && mese <= 12) ? startYear : endYear;
+  };
+
+  const currentMonthYear = getYearForMonth(filters.mese, filters.anno);
+  const daysInMonth = filters.mese ? new Date(currentMonthYear, filters.mese, 0).getDate() : 31;
+  const daysArray = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+
+  const lezioniGridMap = useMemo(() => {
+      const map = {};
+      lezioni.forEach(l => {
+          const alunnoId = l.alunni?.id || l.alunno_id;
+          if (!alunnoId) return; 
+          
+          const dateStr = l.data_lezione.split('T')[0]; 
+          const day = parseInt(dateStr.split('-')[2], 10);
+          
+          const key = `${alunnoId}_${day}`;
+          if (!map[key]) map[key] = [];
+          map[key].push(l);
+      });
+      return map;
+  }, [lezioni]);
+
+  const handleCellClick = async (alunno, day) => {
+      const hasPermission = await checkPermission(filters.anno);
+      if (!hasPermission) return;
+
+      const dateStr = `${currentMonthYear}-${String(filters.mese).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+
+      setEditingLezione({
+          alunni: alunno,
+          docenti: { id: filters.docente_id || (user.ruolo === 'Docente' ? user.id_collegato : '') },
+          data_lezione: dateStr
+      });
+      setIsReadOnly(false);
+      setShowModal(true);
+  };
+
   return (
     <div className="flex flex-col h-full bg-accademia-card border border-gray-800 rounded-xl overflow-hidden shadow-xl">
       
@@ -397,7 +434,23 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
           </h2>
           
           <div className="flex gap-2">
-            {/* --- PULSANTE EXPORT (Solo Admin/Gestore) --- */}
+            <div className="flex items-center bg-gray-800 rounded-md p-1 border border-gray-700">
+                <button 
+                    onClick={() => setViewMode('grid')}
+                    className={`p-1.5 rounded flex items-center justify-center transition-colors ${viewMode === 'grid' ? 'bg-accademia-red text-white' : 'text-gray-400 hover:text-white'}`}
+                    title="Vista Griglia (Smart)"
+                >
+                    <LayoutGrid size={16} />
+                </button>
+                <button 
+                    onClick={() => setViewMode('list')}
+                    className={`p-1.5 rounded flex items-center justify-center transition-colors ${viewMode === 'list' ? 'bg-accademia-red text-white' : 'text-gray-400 hover:text-white'}`}
+                    title="Vista a Lista"
+                >
+                    <List size={16} />
+                </button>
+            </div>
+
             {user.ruolo !== 'Docente' && (
                 <button 
                   onClick={() => setShowExportModal(true)}
@@ -420,7 +473,6 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
-          {/* Selettore Anno con key unica */}
           {user.ruolo !== 'Docente' && (
               <select 
                 name="anno" 
@@ -456,53 +508,136 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
         )}
       </div>
 
-      <div className="flex-1 overflow-auto p-0 custom-scrollbar">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-gray-900/50 text-gray-400 uppercase text-xs sticky top-0 backdrop-blur-sm z-10">
-            <tr>
-              <th className="px-6 py-3 cursor-pointer hover:text-white" onClick={()=>handleSort('data_lezione')}>Data <ArrowUpDown size={12} className="inline"/></th>
-              <th className="px-6 py-3 text-center">Modalità</th> 
-              <th className="px-6 py-3 cursor-pointer hover:text-white" onClick={()=>handleSort('docente')}>Docente <ArrowUpDown size={12} className="inline"/></th>
-              <th className="px-6 py-3 cursor-pointer hover:text-white" onClick={()=>handleSort('alunno')}>Alunno <ArrowUpDown size={12} className="inline"/></th>
-              <th className="px-6 py-3 cursor-pointer hover:text-white" onClick={()=>handleSort('tipo')}>Lezione <ArrowUpDown size={12} className="inline"/></th>
-              <th className="px-6 py-3 text-right">Azioni</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-800">
-            {loading ? <tr><td colSpan="6" className="p-8 text-center text-gray-500">Caricamento...</td></tr> : 
-             sortedLezioni.length === 0 ? <tr><td colSpan="6" className="p-8 text-center text-gray-500">Nessuna lezione trovata.</td></tr> :
-             sortedLezioni.map(row => (
-                <tr key={row.id} className="hover:bg-gray-800/30 transition-colors group">
-                  <td className="px-6 py-3 font-mono text-gray-300">{new Date(row.data_lezione).toLocaleDateString('it-IT')}</td>
-                  
-                  <td className="px-6 py-3 text-center">
-                    {row.tipi_lezioni?.modalita === 'Collettiva' ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold bg-yellow-500/10 text-yellow-500 border border-yellow-500/20">
-                            <Users size={12} /> Gruppo
-                        </span>
-                    ) : (
-                        <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20 opacity-70">
-                            <User size={12} /> Singolo
-                        </span>
-                    )}
-                  </td>
-
-                  <td className="px-6 py-3 text-white">{row.docenti?.cognome} {row.docenti?.nome}</td>
-                  <td className="px-6 py-3 font-medium text-white">{row.alunni?.cognome} {row.alunni?.nome}</td>
-                  <td className="px-6 py-3 text-gray-400">
-                      {row.tipi_lezioni?.tipo || row.tariffe?.tipo_lezione || '-'}
-                  </td>
-                  <td className="px-6 py-3 text-right">
-                    <div className="flex justify-end gap-2 opacity-60 group-hover:opacity-100 transition-opacity">
-                      <button onClick={() => handleViewClick(row)} className="p-1.5 hover:bg-gray-700 rounded text-green-400"><Eye size={16}/></button>
-                      <button onClick={() => handleEditClick(row)} className="p-1.5 hover:bg-gray-700 rounded text-blue-400"><Edit2 size={16}/></button>
-                      <button onClick={() => handleDeleteClick(row)} className="p-1.5 hover:bg-gray-700 rounded text-red-400"><Trash2 size={16}/></button>
+      <div className="flex-1 overflow-auto p-0 custom-scrollbar relative flex flex-col">
+        {viewMode === 'grid' && activeLessonTypes.length > 0 && filters.mese && (
+            <div className="flex flex-wrap gap-x-4 gap-y-2 py-2 px-4 bg-gray-900/40 border-b border-gray-800 shrink-0">
+                <span className="text-xs text-gray-500 font-bold uppercase mr-2">Materie:</span>
+                {activeLessonTypes.map(item => (
+                    <div key={item.tipo} className="flex items-center gap-1.5">
+                        <div className="w-3 h-3 rounded-sm shadow-sm" style={{ backgroundColor: item.colore }}></div>
+                        <span className="text-xs text-gray-300">{item.tipo}</span>
                     </div>
-                  </td>
+                ))}
+            </div>
+        )}
+
+        {viewMode === 'list' ? (
+            <table className="w-full text-left text-sm">
+              <thead className="bg-gray-900/50 text-gray-400 uppercase text-xs sticky top-0 backdrop-blur-sm z-10">
+                <tr>
+                  <th className="px-6 py-3 cursor-pointer hover:text-white" onClick={()=>handleSort('data_lezione')}>Data <ArrowUpDown size={12} className="inline"/></th>
+                  <th className="px-6 py-3 text-center">Modalità</th> 
+                  <th className="px-6 py-3 cursor-pointer hover:text-white" onClick={()=>handleSort('docente')}>Docente <ArrowUpDown size={12} className="inline"/></th>
+                  <th className="px-6 py-3 cursor-pointer hover:text-white" onClick={()=>handleSort('alunno')}>Alunno <ArrowUpDown size={12} className="inline"/></th>
+                  <th className="px-6 py-3 cursor-pointer hover:text-white" onClick={()=>handleSort('tipo')}>Lezione <ArrowUpDown size={12} className="inline"/></th>
+                  <th className="px-6 py-3 text-right">Azioni</th>
                 </tr>
-            ))}
-          </tbody>
-        </table>
+              </thead>
+              <tbody className="divide-y divide-gray-800">
+                {loading ? <tr><td colSpan="6" className="p-8 text-center text-gray-500">Caricamento...</td></tr> : 
+                 sortedLezioni.length === 0 ? <tr><td colSpan="6" className="p-8 text-center text-gray-500">Nessuna lezione trovata.</td></tr> :
+                 sortedLezioni.map(row => (
+                    <tr key={row.id} className="hover:bg-gray-800/30 transition-colors group">
+                      <td className="px-6 py-3 font-mono text-gray-300">{new Date(row.data_lezione).toLocaleDateString('it-IT')}</td>
+                      <td className="px-6 py-3 text-center">
+                        {row.tipi_lezioni?.modalita === 'Collettiva' ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold bg-yellow-500/10 text-yellow-500 border border-yellow-500/20">
+                                <Users size={12} /> Gruppo
+                            </span>
+                        ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20 opacity-70">
+                                <User size={12} /> Singolo
+                            </span>
+                        )}
+                      </td>
+                      <td className="px-6 py-3 text-white">{row.docenti?.cognome} {row.docenti?.nome}</td>
+                      <td className="px-6 py-3 font-medium text-white">{row.alunni?.cognome} {row.alunni?.nome}</td>
+                      <td className="px-6 py-3 text-gray-400">
+                          {row.tipi_lezioni?.tipo || row.tariffe?.tipo_lezione || '-'}
+                      </td>
+                      <td className="px-6 py-3 text-right">
+                        <div className="flex justify-end gap-2 opacity-60 group-hover:opacity-100 transition-opacity">
+                          <button onClick={() => handleViewClick(row)} className="p-1.5 hover:bg-gray-700 rounded text-green-400"><Eye size={16}/></button>
+                          <button onClick={() => handleEditClick(row)} className="p-1.5 hover:bg-gray-700 rounded text-blue-400"><Edit2 size={16}/></button>
+                          <button onClick={() => handleDeleteClick(row)} className="p-1.5 hover:bg-gray-700 rounded text-red-400"><Trash2 size={16}/></button>
+                        </div>
+                      </td>
+                    </tr>
+                ))}
+              </tbody>
+            </table>
+        ) : (
+            <div className="min-w-max pb-10 relative">
+                {!filters.mese ? (
+                    <div className="p-8 text-center text-yellow-500 font-bold bg-yellow-900/20 border-b border-yellow-900/50">
+                        <AlertTriangle className="inline mr-2" />
+                        Seleziona un mese specifico dal filtro per visualizzare la griglia.
+                    </div>
+                ) : (
+                    <table className="w-full text-left text-sm border-collapse">
+                      <thead className="bg-gray-900/80 text-gray-400 uppercase text-[10px] sticky top-0 backdrop-blur-sm z-20 shadow-md">
+                        <tr>
+                          <th className="px-4 py-3 sticky left-0 bg-gray-900 z-30 border-r border-b border-gray-600 w-48 shadow-md">Alunno</th>
+                          {daysArray.map(day => (
+                              <th 
+                                  key={day} 
+                                  onMouseEnter={() => setHoveredDay(day)}
+                                  onMouseLeave={() => setHoveredDay(null)}
+                                  className={`px-1 py-3 text-center border-r border-b border-gray-600 w-8 transition-colors ${hoveredDay === day ? 'bg-gray-700 text-white' : ''}`}
+                              >
+                                  {day}
+                              </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {loading ? <tr><td colSpan={daysInMonth + 1} className="p-8 text-center text-gray-500 border-b border-gray-700">Caricamento...</td></tr> : 
+                         alunni.length === 0 ? <tr><td colSpan={daysInMonth + 1} className="p-8 text-center text-gray-500 border-b border-gray-700">Nessun alunno trovato.</td></tr> :
+                         alunni.map(alunno => (
+                            <tr key={alunno.id} className="hover:bg-gray-800/30 transition-colors group">
+                              <td className="px-4 py-2 font-medium text-white sticky left-0 bg-accademia-card z-10 border-r border-b border-gray-600 truncate max-w-[12rem] shadow-[2px_0_5px_-2px_rgba(0,0,0,0.5)]">
+                                  {alunno.cognome} {alunno.nome}
+                              </td>
+                              {daysArray.map(day => {
+                                  const cellLezioni = lezioniGridMap[`${alunno.id}_${day}`];
+                                  const isFilled = cellLezioni && cellLezioni.length > 0;
+                                  
+                                  return (
+                                      <td 
+                                          key={day} 
+                                          onClick={() => handleCellClick(alunno, day)}
+                                          onMouseEnter={() => setHoveredDay(day)}
+                                          onMouseLeave={() => setHoveredDay(null)}
+                                          className={`p-1 border-r border-b border-gray-700 text-center cursor-pointer transition-all align-top h-10 ${hoveredDay === day ? 'bg-gray-800/60' : ''} hover:bg-gray-600/50`}
+                                      >
+                                          {isFilled && (
+                                              <div className="flex flex-col gap-1 w-full justify-start mt-0.5">
+                                                  {cellLezioni.map(lez => (
+                                                      <div 
+                                                          key={lez.id}
+                                                          onClick={(e) => { 
+                                                              e.stopPropagation(); 
+                                                              handleViewClick(lez); 
+                                                          }}
+                                                          className="w-full min-h-[28px] rounded flex items-center justify-center text-white shadow-sm tooltip-trigger hover:brightness-125 hover:scale-[1.05] hover:z-10 transition-all relative"
+                                                          style={{ backgroundColor: lez.tipi_lezioni?.colore_hex || '#dc2626' }}
+                                                          title={`${lez.tipi_lezioni?.tipo || 'Lezione'} - ${lez.docenti?.cognome}`}
+                                                      >
+                                                          {cellLezioni.length === 1 ? <CheckSquare size={14} /> : <div className="w-1.5 h-1.5 rounded-full bg-white/70"></div>}
+                                                      </div>
+                                                  ))}
+                                              </div>
+                                          )}
+                                      </td>
+                                  )
+                              })}
+                            </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                )}
+            </div>
+        )}
       </div>
 
       {showModal && (
@@ -514,12 +649,13 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
           user={user}
           anno={filters.anno} 
           isReadOnly={isReadOnly}
+          setIsReadOnly={setIsReadOnly}
           onClose={() => setShowModal(false)}
           onSave={() => { setShowModal(false); fetchLezioni(); }}
+          onDelete={() => { setShowModal(false); handleDeleteClick(editingLezione); }}
         />
       )}
 
-      {/* --- MODALE EXPORT PDF (NUOVO) --- */}
       {showExportModal && (
           <ModalExportRegistro 
             docenti={docenti} 
@@ -545,7 +681,7 @@ export default function RegistroLezioni({ user, currentGlobalYear }) {
 }
 
 // --- MODALE INSERIMENTO/MODIFICA ---
-function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose, onSave, isReadOnly }) {
+function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose, onSave, isReadOnly, setIsReadOnly, onDelete }) {
   const [formData, setFormData] = useState({
     id: lezione?.id || null,
     docente_id: lezione?.docenti?.id || (user.ruolo === 'Docente' ? user.id_collegato : ''),
@@ -564,7 +700,6 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
   const [filteredAlunni, setFilteredAlunni] = useState([]);
   const [loadingAlunni, setLoadingAlunni] = useState(false);
 
-  // --- STATO PER IL DIALOG DI CONFERMA INTERNO ---
   const [confirmData, setConfirmData] = useState({
     isOpen: false,
     type: 'warning',
@@ -573,7 +708,6 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
     onConfirm: null
   });
 
-  // 1. CARICAMENTO ALUNNI FILTRATI PER DOCENTE (INVARIATO)
   useEffect(() => {
     const fetchAlunniByDocente = async () => {
         if (!formData.docente_id) {
@@ -605,8 +739,6 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
     fetchAlunniByDocente();
   }, [formData.docente_id, alunni, user.ruolo]);
 
-
-  // 2. FILTRA TARIFFE & CHECK MODALITA' (INVARIATO)
   useEffect(() => {
     const filterTariffeByDocente = async () => {
       if (!formData.docente_id) {
@@ -642,9 +774,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
         setLessonModes(modesMap);
 
         const filtered = tariffe.filter(t => allowedTypes.includes(t.tipo_lezione));
-        
         const uniqueFiltered = Array.from(new Map(filtered.map(item => [item.tipo_lezione, item])).values());
-
         setFilteredTariffe(uniqueFiltered);
       }
       setLoadingTariffe(false);
@@ -675,13 +805,40 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
       }
   };
 
-  // --- NUOVA FUNZIONE DI SALVATAGGIO (Contiene la logica Async) ---
+  const handleActivateEdit = (e) => {
+      e.preventDefault();
+      if (setIsReadOnly) setIsReadOnly(false);
+  };
+
+  const handleActivateDuplicate = (e) => {
+      e.preventDefault();
+      if (setIsReadOnly) setIsReadOnly(false);
+
+      let tariffaIdCompatibile = '';
+      if (lezione && lezione.tipi_lezioni) {
+          const tariffaTrovata = tariffe.find(t => t.tipo_lezione === lezione.tipi_lezioni.tipo);
+          if (tariffaTrovata) {
+              tariffaIdCompatibile = tariffaTrovata.id;
+          }
+      }
+
+      if (isCollettiva && lezione?.alunni?.id) {
+          setSelectedAlunniIds([lezione.alunni.id]);
+      }
+
+      setFormData(prev => ({ 
+          ...prev, 
+          id: null, 
+          data_lezione: '',
+          tipo_lezione_id: tariffaIdCompatibile || prev.tipo_lezione_id
+      }));
+  };
+
   const saveLezione = async () => {
     try {
       let tipoLezioneId = formData.tipo_lezione_id;
 
       if (!formData.id) {
-        // Logica per trovare/creare il tipo lezione
         const tariffaSelezionata = tariffe.find(t => String(t.id) === String(formData.tipo_lezione_id));
         if (!tariffaSelezionata) return alert("Errore: tariffa non trovata.");
 
@@ -725,16 +882,11 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
       };
 
       if (formData.id) {
-        // --- MODIFICA ---
         if (isCollettiva) {
             const oldData = lezione.data_lezione.slice(0, 10);
             const newData = formData.data_lezione;
 
-            // Nota: per semplicità, se si modifica la data di un gruppo, aggiorniamo senza ulteriore dialog (o si può aggiungere qui)
-            // Manteniamo la logica originale, ma semplificata per l'uso in saveLezione
             if (oldData !== newData) {
-                 // Qui potremmo voler chiedere conferma, ma per ora eseguiamo l'aggiornamento
-                 // Se servisse un altro dialog, andrebbe gestito a monte
                  const { error } = await supabase
                     .from('registro')
                     .update({ data_lezione: newData, note: formData.note })
@@ -752,7 +904,6 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
         }
 
       } else {
-        // --- NUOVO ---
         if (isCollettiva) {
             const rowsToInsert = selectedAlunniIds.map((alunnoId, index) => ({
                 ...basePayload,
@@ -775,7 +926,7 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
         }
       }
       
-      onSave(); // Chiudi modale principale
+      onSave(); 
     } catch(err) { 
       console.error("Errore salvataggio lezione:", err);
       alert("Errore: " + err.message); 
@@ -786,14 +937,12 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
     e.preventDefault();
     if (isReadOnly) return;
     
-    // --- 1. Validazione Sincrona ---
     if (!formData.id) {
         if (!formData.tipo_lezione_id) return alert("Seleziona un tipo di lezione");
         if (isCollettiva && selectedAlunniIds.length === 0) return alert("Seleziona almeno un alunno per la lezione di gruppo.");
         if (!isCollettiva && !formData.alunno_id) return alert("Seleziona un alunno.");
     }
 
-    // --- 2. Controllo Data Futura ---
     const todayStr = new Date().toISOString().slice(0, 10);
     if (formData.data_lezione > todayStr) {
         setConfirmData({
@@ -802,12 +951,11 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
             title: 'Data Futura',
             message: 'Hai selezionato una data successiva a quella odierna.\nVuoi registrare comunque la lezione?',
             onConfirm: () => {
-                setConfirmData(prev => ({ ...prev, isOpen: false })); // Chiudi dialog
-                saveLezione(); // Procedi al salvataggio
+                setConfirmData(prev => ({ ...prev, isOpen: false }));
+                saveLezione(); 
             }
         });
     } else {
-        // Se la data è ok, salva direttamente
         saveLezione();
     }
   };
@@ -824,8 +972,6 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">
           
-          {/* ... (TUTTI I CAMPI DEL FORM RIMANGONO INVARIATI) ... */}
-          {/* SELEZIONE DOCENTE */}
           {user.ruolo !== 'Docente' && (
             <div>
               <label className="block text-xs text-gray-400 uppercase mb-1">Docente</label>
@@ -845,7 +991,6 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
             </div>
           )}
           
-          {/* SELEZIONE TIPO LEZIONE */}
           <div>
             <label className="block text-xs text-gray-400 uppercase mb-1">
               Tipo Lezione {!formData.id && `(Tariffa ${anno})`}
@@ -884,7 +1029,6 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
             )}
           </div>
 
-          {/* SELEZIONE ALUNNO / ALUNNI */}
           <div>
             <label className="block text-xs text-gray-400 uppercase mb-1 flex items-center justify-between">
                 <span>{isCollettiva && !formData.id ? 'Partecipanti (Lezione di Gruppo)' : 'Alunno'}</span>
@@ -892,7 +1036,6 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
                 {loadingAlunni && <Loader2 size={12} className="animate-spin text-gray-400"/>}
             </label>
             
-            {/* USO filteredAlunni INVECE DI alunni */}
             {!isCollettiva || formData.id ? (
                 <select 
                     value={formData.alunno_id} 
@@ -960,8 +1103,54 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
             />
           </div>
 
-          {!isReadOnly && (
-            <div className="flex justify-end pt-4">
+          {isReadOnly ? (
+            <div className="flex justify-end pt-4 gap-2 border-t border-gray-800 mt-4">
+                {formData.id && (
+                    <button 
+                        type="button" 
+                        onClick={onDelete}
+                        className="bg-red-900/30 hover:bg-red-900/80 text-red-400 hover:text-white border border-red-800/50 px-4 py-2 rounded-lg font-bold transition-colors shadow-lg flex items-center gap-2 mr-auto"
+                    >
+                        <Trash2 size={16}/> Elimina
+                    </button>
+                )}
+                
+                <button 
+                    type="button" 
+                    onClick={handleActivateDuplicate}
+                    className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg font-bold transition-colors shadow-lg flex items-center gap-2"
+                >
+                    <Copy size={16}/> Duplica
+                </button>
+                <button 
+                    type="button" 
+                    onClick={handleActivateEdit}
+                    className="bg-accademia-red hover:bg-red-700 text-white px-6 py-2 rounded-lg font-bold transition-colors shadow-lg flex items-center gap-2"
+                >
+                    <Edit2 size={16}/> Modifica
+                </button>
+            </div>
+          ) : (
+            <div className="flex justify-end pt-4 gap-2 border-t border-gray-800 mt-4">
+              {formData.id && (
+                  <button 
+                      type="button" 
+                      onClick={onDelete}
+                      className="bg-red-900/30 hover:bg-red-900/80 text-red-400 hover:text-white border border-red-800/50 px-4 py-2 rounded-lg font-bold transition-colors shadow-lg flex items-center gap-2 mr-auto"
+                  >
+                      <Trash2 size={16}/> Elimina
+                  </button>
+              )}
+              
+              {formData.id && (
+                  <button 
+                      type="button" 
+                      onClick={handleActivateDuplicate}
+                      className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg font-bold transition-colors shadow-lg flex items-center gap-2"
+                  >
+                      <Copy size={16}/> Duplica
+                  </button>
+              )}
               <button type="submit" className="bg-accademia-red hover:bg-red-700 text-white px-6 py-2 rounded-lg font-bold transition-colors shadow-lg">
                 {isCollettiva && selectedAlunniIds.length > 1 && !formData.id ? `Registra ${selectedAlunniIds.length} Lezioni` : 'Salva Lezione'}
               </button>
@@ -969,7 +1158,6 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
           )}
         </form>
 
-        {/* --- INSERISCI QUI IL DIALOG DI CONFERMA --- */}
         <ConfirmDialog
             isOpen={confirmData.isOpen}
             type={confirmData.type}
@@ -987,10 +1175,10 @@ function ModalRegistro({ lezione, docenti, alunni, tariffe, user, anno, onClose,
   );
 }
 
-// --- NUOVO: MODALE EXPORT REGISTRO ---
+// --- MODALE EXPORT REGISTRO ---
 function ModalExportRegistro({ docenti, anno, user, onClose }) {
-    const [selectedMonths, setSelectedMonths] = useState(MESI.map(m => m.val)); // Default tutti
-    const [selectedDocenti, setSelectedDocenti] = useState(docenti.map(d => d.id)); // Default tutti
+    const [selectedMonths, setSelectedMonths] = useState(MESI.map(m => m.val));
+    const [selectedDocenti, setSelectedDocenti] = useState(docenti.map(d => d.id));
     const [loading, setLoading] = useState(false);
 
     const toggleMonth = (val) => {
@@ -1039,7 +1227,6 @@ function ModalExportRegistro({ docenti, anno, user, onClose }) {
             const { data, error } = await query;
             if (error) throw error;
 
-            // Filtro ulteriore per mesi
             const filteredData = data.filter(r => {
                 const m = new Date(r.data_lezione).getMonth() + 1;
                 return selectedMonths.includes(m);
@@ -1048,14 +1235,11 @@ function ModalExportRegistro({ docenti, anno, user, onClose }) {
             if (filteredData.length === 0) {
                 alert("Nessuna lezione trovata con i filtri selezionati.");
             } else {
-                // Info Scuola per il PDF
                 const schoolInfo = {
                     name: user.scuole?.nome || 'Accademia Musicale',
                     logo: user.scuole?.logo_url || null
                 };
                 
-                // Creiamo l'array delle etichette dei mesi selezionati per l'intestazione
-                // Ordiniamo i mesi selezionati secondo l'ordine definito in MESI
                 const selectedLabels = MESI
                     .filter(m => selectedMonths.includes(m.val))
                     .map(m => m.label);
@@ -1082,8 +1266,6 @@ function ModalExportRegistro({ docenti, anno, user, onClose }) {
                 </div>
 
                 <div className="flex-1 overflow-y-auto custom-scrollbar space-y-6 pr-2">
-                    
-                    {/* SELEZIONE MESI */}
                     <div className="bg-gray-900/30 p-4 rounded-lg border border-gray-800">
                         <div className="flex justify-between items-center mb-3">
                             <h4 className="text-sm font-bold text-accademia-red uppercase">1. Seleziona Mesi</h4>
@@ -1109,7 +1291,6 @@ function ModalExportRegistro({ docenti, anno, user, onClose }) {
                         </div>
                     </div>
 
-                    {/* SELEZIONE DOCENTI */}
                     <div className="bg-gray-900/30 p-4 rounded-lg border border-gray-800">
                         <div className="flex justify-between items-center mb-3">
                             <h4 className="text-sm font-bold text-accademia-red uppercase">2. Seleziona Docenti</h4>
@@ -1134,7 +1315,6 @@ function ModalExportRegistro({ docenti, anno, user, onClose }) {
                             ))}
                         </div>
                     </div>
-
                 </div>
 
                 <div className="pt-4 mt-4 border-t border-gray-800 flex justify-end gap-3 shrink-0">
